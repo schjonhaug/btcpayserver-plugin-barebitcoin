@@ -21,7 +21,7 @@ using Newtonsoft.Json.Linq;
 using Newtonsoft.Json.Serialization;
 using Network = NBitcoin.Network;
 
-namespace BTCPayServer.Plugins.Blink;
+namespace BTCPayServer.Plugins.BareBitcoin;
 
 public class BlinkLightningClient : ILightningClient
 {

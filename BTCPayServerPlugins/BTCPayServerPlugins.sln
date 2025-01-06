@@ -55,7 +55,7 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.Dynami
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.Bringin", "Plugins\BTCPayServer.Plugins.Bringin\BTCPayServer.Plugins.Bringin.csproj", "{D4AFEC95-64D4-4FC4-9AE4-B82F4C6D6E29}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.Blink", "Plugins\BTCPayServer.Plugins.Blink\BTCPayServer.Plugins.Blink.csproj", "{C0714C5C-1798-4576-9892-3CE097FDE76F}"
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.BareBitcoin", "Plugins\BTCPayServer.Plugins.BareBitcoin\BTCPayServer.Plugins.BareBitcoin.csproj", "{C0714C5C-1798-4576-9892-3CE097FDE76F}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "BTCPayServer.Plugins.MicroNode", "Plugins\BTCPayServer.Plugins.MicroNode\BTCPayServer.Plugins.MicroNode.csproj", "{95626F3B-7722-4AE7-9C12-EDB1E58687E2}"
 EndProject
