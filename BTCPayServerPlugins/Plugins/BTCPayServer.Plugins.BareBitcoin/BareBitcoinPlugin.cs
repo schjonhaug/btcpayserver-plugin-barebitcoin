@@ -18,7 +18,7 @@ namespace BTCPayServer.Plugins.BareBitcoin
 
         public override void Execute(IServiceCollection applicationBuilder)
         {
-            applicationBuilder.AddUIExtension("ln-payment-method-setup-tab", "Blink/LNPaymentMethodSetupTab");
+            applicationBuilder.AddUIExtension("ln-payment-method-setup-tab", "BareBitcoin/LNPaymentMethodSetupTab");
             applicationBuilder.AddSingleton<ILightningConnectionStringHandler>(provider => provider.GetRequiredService<BareBitcoinLightningConnectionStringHandler>());
             applicationBuilder.AddSingleton<BareBitcoinLightningConnectionStringHandler>();
 
