@@ -1,1 +1,0 @@
-Once this plugin is installed on your BTCPay Server, the Bitcoin whitepaper becomes available by browing to the `/bitcoin.pdf` path.
