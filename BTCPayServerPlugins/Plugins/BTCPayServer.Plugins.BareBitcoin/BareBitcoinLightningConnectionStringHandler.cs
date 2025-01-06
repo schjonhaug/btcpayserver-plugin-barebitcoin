@@ -23,7 +23,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
     public ILightningClient? Create(string connectionString, Network network, out string? error)
     {
         var kv = LightningConnectionStringHelper.ExtractValues(connectionString, out var type);
-        if (type != "blink")
+        if (type != "barebitcoin")
         {
             error = null;
             return null;
