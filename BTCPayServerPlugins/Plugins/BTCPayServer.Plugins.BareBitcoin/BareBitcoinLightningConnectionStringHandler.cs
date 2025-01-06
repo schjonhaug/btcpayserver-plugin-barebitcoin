@@ -29,7 +29,9 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             return null;
         }
 
-        if (!kv.TryGetValue("server", out var server))
+        var server = "https://api.bb.no";
+
+      /*  if (!kv.TryGetValue("server", out var server))
         {
             server = network.Name switch
             {
@@ -39,37 +41,37 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             };
             // error = $"The key 'server' is mandatory for blink connection strings";
             // return null;
-        }
+        } */
 
-        if (!Uri.TryCreate(server, UriKind.Absolute, out var uri)
-            || uri.Scheme != "http" && uri.Scheme != "https")
+        if (!Uri.TryCreate(server, UriKind.Absolute, out var uri) )
         {
-            error = "The key 'server' should be an URI starting by http:// or https://";
+            error = "Invalid server URL";
             return null;
         }
 
-        bool allowInsecure = true; //TODO: was false
-        if (kv.TryGetValue("allowinsecure", out var allowinsecureStr))
-        {
-            var allowedValues = new[] {"true", "false"};
-            if (!allowedValues.Any(v => v.Equals(allowinsecureStr, StringComparison.OrdinalIgnoreCase)))
-            {
-                error = "The key 'allowinsecure' should be true or false";
-                return null;
-            }
-
-            allowInsecure = allowinsecureStr.Equals("true", StringComparison.OrdinalIgnoreCase);
-        }
+        bool allowInsecure = false;
+        
 
         if (!LightningConnectionStringHelper.VerifySecureEndpoint(uri, allowInsecure))
         {
             error = "The key 'allowinsecure' is false, but server's Uri is not using https";
             return null;
         }
-
-        if (!kv.TryGetValue("api-key", out var apiKey))
+        if (!kv.TryGetValue("public-key", out var publicKey))
         {
-            error = "The key 'api-key' is not found";
+            error = "The key 'public-key' is not found";
+            return null;
+        }
+
+        if (!kv.TryGetValue("private-key", out var privateKey)) 
+        {
+            error = "The key 'private-key' is not found";
+            return null;
+        }
+
+        if (!kv.TryGetValue("account-id", out var accountId))
+        {
+            error = "The key 'account-id' is not found"; 
             return null;
         }
 
@@ -77,16 +79,30 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         var client = _httpClientFactory.CreateClient();
 
-        client.DefaultRequestHeaders.Add("X-Api-Key", apiKey);
-
         client.BaseAddress = uri;
 
-        kv.TryGetValue("wallet-id", out var walletId);
-        var bclient = new BareBitcoinLightningClient(apiKey, uri, walletId, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}"));
-        (Network Network, string DefaultWalletId, string DefaultWalletCurrency) res;
+        var walletId = "default"; //TODO: Delete
+
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, walletId, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}"));
+      
+
+        try
+            {
+                bclient.GetBalanceBareBitcoin().GetAwaiter().GetResult();
+            }
+            catch (Exception e)
+            {
+                error = "GetBalanceBareBitcoin failed";
+                return null;
+            }
+      
+      
+      
+       /* (Network Network, string DefaultWalletId, string DefaultWalletCurrency) res;
         try
         {
-            res = bclient.GetNetworkAndDefaultWallet().GetAwaiter().GetResult();
+            res = bclient.GetBalanceBareBitcoin().GetAwaiter().GetResult();
+            //res = bclient.GetNetworkAndDefaultWallet().GetAwaiter().GetResult();
             if (res.Network != network)
             {
                 error = $"The wallet is not on the right network ({res.Network.Name} instead of {network.Name})";
@@ -122,7 +138,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
                 error = "Invalid wallet id";
                 return null;
             }
-        }
+        }*/
 
         return bclient;
     }

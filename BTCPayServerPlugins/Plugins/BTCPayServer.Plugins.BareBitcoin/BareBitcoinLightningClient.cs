@@ -25,9 +25,15 @@ namespace BTCPayServer.Plugins.BareBitcoin;
 
 public class BareBitcoinLightningClient : ILightningClient
 {
-    private readonly string _apiKey;
+
+ 
+    private readonly string _privateKey;
+    private readonly string _publicKey;
+    private readonly string _accountId; 
     private readonly Uri _apiEndpoint;
-    public  string? WalletId { get; set; }
+    public  string? WalletId { get; set; } // TODO: Delete
+    private readonly string _apiKey; // TODO Delete
+   
 
     public string? WalletCurrency { get; set; }
 
@@ -39,9 +45,14 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         [JsonProperty("X-API-KEY")] public string ApiKey { get; set; }
     }
-    public BareBitcoinLightningClient(string apiKey, Uri apiEndpoint, string walletId, Network network, HttpClient httpClient, ILogger logger)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, string walletId, Network network, HttpClient httpClient, ILogger logger)
     {
-        _apiKey = apiKey;
+        _apiKey = "TODO-DELETE";
+        var apiKey = "TODO-DELETE";
+        _privateKey = privateKey;
+        _publicKey = publicKey;
+        _accountId = accountId;
+
         _apiEndpoint = apiEndpoint;
         WalletId = walletId;
         _network = network;
@@ -538,6 +549,8 @@ query GetNetworkAndDefaultWallet {
         throw new NotSupportedException();
     }
 
+
+
     public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = new())
     {
         var request = new GraphQLRequest
@@ -708,4 +721,121 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
     {
         throw new NotImplementedException();
     }
+
+
+
+
+    public async Task<LightningNodeBalance> GetBalanceBareBitcoin(CancellationToken cancellation = new())
+    {
+        try 
+        {
+            Logger.LogInformation("Getting balance from BareBitcoin");
+            var response = await MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
+            Logger.LogInformation("Received balance response: {response}", response);
+            
+            // Parse response and convert to LightningNodeBalance
+            // You'll need to adjust this based on the actual response format
+            return new LightningNodeBalance(); 
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error getting balance from BareBitcoin");
+            throw;
+        }
+    }
+
+    private string CreateHmac(string secret, string method, string path, long nonce, string? data = null)
+    {
+        try 
+        {
+            // Encode data: nonce and raw data
+            var encodedData = data != null ? $"{nonce}{data}" : nonce.ToString();
+            Logger.LogInformation("Creating HMAC with encodedData: {encodedData}", encodedData);
+
+            // SHA-256 hash of the encoded data
+            using var sha256 = System.Security.Cryptography.SHA256.Create();
+            var hashedData = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(encodedData));
+            Logger.LogInformation("Hashed data (hex): {hashedData}", BitConverter.ToString(hashedData).Replace("-", ""));
+
+            // Concatenate method, path, and hashed data
+            var message = new List<byte>();
+            message.AddRange(System.Text.Encoding.UTF8.GetBytes(method));
+            message.AddRange(System.Text.Encoding.UTF8.GetBytes(path));
+            message.AddRange(hashedData);
+            Logger.LogInformation("Combined message (hex): {message}", BitConverter.ToString(message.ToArray()).Replace("-", ""));
+
+            // Decode secret from base64
+            var decodedSecret = Convert.FromBase64String(secret);
+            Logger.LogInformation("Decoded secret length: {length} bytes", decodedSecret.Length);
+
+            // Generate HMAC
+            using var hmac = new System.Security.Cryptography.HMACSHA256(decodedSecret);
+            var macsum = hmac.ComputeHash(message.ToArray());
+            var result = Convert.ToBase64String(macsum);
+            
+            Logger.LogInformation("Generated HMAC: {hmac}", result);
+            return result;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error creating HMAC signature");
+            throw;
+        }
+    }
+
+    private async Task<string> MakeAuthenticatedRequest(string method, string path, string? data = null)
+    {
+        try 
+        {
+            using var httpClient = new HttpClient();
+            var nonce = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            Logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
+            
+            if (data != null)
+            {
+                Logger.LogInformation("Request data: {data}", data);
+            }
+
+            var hmac = CreateHmac(_privateKey, method, path, nonce, data);
+            
+            var requestUrl = $"https://api.bb.no{path}";
+            Logger.LogInformation("Full request URL: {url}", requestUrl);
+            
+            var request = new HttpRequestMessage(new HttpMethod(method), requestUrl);
+            request.Headers.Add("x-bb-api-hmac", hmac);
+            request.Headers.Add("x-bb-api-key", _publicKey);
+            request.Headers.Add("x-bb-api-nonce", nonce.ToString());
+
+            Logger.LogInformation("Request headers:");
+            Logger.LogInformation("x-bb-api-hmac: {hmac}", hmac);
+            Logger.LogInformation("x-bb-api-key: {key}", _publicKey);
+            Logger.LogInformation("x-bb-api-nonce: {nonce}", nonce);
+
+            if (data != null && method != "GET")
+            {
+                request.Content = new StringContent(data, System.Text.Encoding.UTF8, "application/json");
+                Logger.LogInformation("Added request content-type: application/json");
+            }
+
+            var response = await httpClient.SendAsync(request);
+            var responseContent = await response.Content.ReadAsStringAsync();
+            
+            Logger.LogInformation("Response status: {statusCode}", response.StatusCode);
+            Logger.LogInformation("Response content: {content}", responseContent);
+            
+            response.EnsureSuccessStatusCode();
+            return responseContent;
+        }
+        catch (HttpRequestException ex)
+        {
+            Logger.LogError(ex, "HTTP request failed");
+            throw;
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Unexpected error making authenticated request");
+            throw;
+        }
+    }
+
 }
