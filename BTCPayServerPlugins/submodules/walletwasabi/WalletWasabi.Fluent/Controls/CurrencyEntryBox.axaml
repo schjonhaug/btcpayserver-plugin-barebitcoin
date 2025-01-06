@@ -1,0 +1,288 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Design.PreviewWith>
+    <CurrencyEntryBox IsReadOnly="True" />
+  </Design.PreviewWith>
+
+  <!-- TextControlBorderThemeThickness -->
+  <Thickness x:Key="CurrencyEntryBoxBorderThemeThickness">0,0,0,2</Thickness>
+  <!-- TextControlBorderThemeThicknessFocused -->
+  <Thickness x:Key="CurrencyEntryBoxBorderThemeThicknessFocused">0,0,0,2</Thickness>
+  <!-- TextControlThemePadding -->
+  <Thickness x:Key="CurrencyEntryBoxThemePadding">15,10,15,8</Thickness>
+
+  <MenuFlyout x:Key="CurrencyEntryBoxDefaultTextBoxContextFlyout">
+    <MenuItem x:Name="TextBoxContextFlyoutCutItem"
+              Header="Cut"
+              Command="{Binding $parent[TextBox].Cut}"
+              IsEnabled="{Binding $parent[TextBox].CanCut}"
+              InputGesture="{x:Static TextBox.CutGesture}" />
+    <MenuItem x:Name="TextBoxContextFlyoutCopyItem"
+              Header="Copy"
+              Command="{Binding $parent[TextBox].Copy}"
+              IsEnabled="{Binding $parent[TextBox].CanCopy}"
+              InputGesture="{x:Static TextBox.CopyGesture}"/>
+    <MenuItem x:Name="TextBoxContextFlyoutPasteItem"
+              Header="Paste"
+              Command="{Binding $parent[CurrencyEntryBox].ModifiedPasteAsync}"
+              IsEnabled="{Binding $parent[TextBox].CanPaste}"
+              InputGesture="{x:Static TextBox.PasteGesture}"/>
+  </MenuFlyout>
+  <MenuFlyout x:Key="CurrencyEntryBoxHorizontalTextBoxContextFlyout"
+              FlyoutPresenterTheme="{StaticResource HorizontalMenuFlyoutPresenter}"
+              ItemContainerTheme="{StaticResource HorizontalMenuItem}">
+    <MenuItem x:Name="HorizontalTextBoxContextFlyoutCutItem"
+              Header="Cut"
+              Command="{Binding $parent[TextBox].Cut}"
+              IsEnabled="{Binding $parent[TextBox].CanCut}"
+              IsVisible="{Binding $parent[TextBox].CanCut}" />
+    <MenuItem x:Name="HorizontalTextBoxContextFlyoutCopyItem"
+              Header="Copy"
+              Command="{Binding $parent[TextBox].Copy}"
+              IsEnabled="{Binding $parent[TextBox].CanCopy}"
+              IsVisible="{Binding $parent[TextBox].CanCopy}" />
+    <MenuItem x:Name="HorizontalTextBoxContextFlyoutPasteItem"
+              Header="Paste"
+              Command="{Binding $parent[CurrencyEntryBox].ModifiedPasteAsync}"
+              IsEnabled="{Binding $parent[TextBox].CanPaste}" />
+  </MenuFlyout>
+
+  <ControlTheme x:Key="{x:Type CurrencyEntryBox}" TargetType="CurrencyEntryBox">
+
+    <Setter Property="Foreground" Value="{DynamicResource TextControlForeground}" />
+    <Setter Property="Background" Value="{DynamicResource TextControlBackground}" />
+    <Setter Property="CaretBrush" Value="{DynamicResource TextControlForeground}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource TextControlBorderBrush}" />
+    <Setter Property="SelectionBrush" Value="{DynamicResource TextControlSelectionHighlightColor}" />
+    <Setter Property="BorderThickness" Value="{DynamicResource CurrencyEntryBoxBorderThemeThickness}" />
+    <Setter Property="FontSize" Value="{DynamicResource ControlContentThemeFontSize}" />
+    <Setter Property="MinHeight" Value="{DynamicResource TextControlThemeMinHeight}" />
+    <Setter Property="MinWidth" Value="{DynamicResource TextControlThemeMinWidth}" />
+    <Setter Property="Padding" Value="{DynamicResource CurrencyEntryBoxThemePadding}" />
+    <Setter Property="FocusAdorner" Value="{x:Null}" />
+    <Setter Property="ContextFlyout" Value="{OnFormFactor Desktop={StaticResource CurrencyEntryBoxDefaultTextBoxContextFlyout}, Mobile={StaticResource CurrencyEntryBoxHorizontalTextBoxContextFlyout}}" />
+    <Setter Property="Cursor" Value="IBeam" />
+    <Setter Property="HorizontalContentAlignment" Value="Left" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <DockPanel>
+          <DataValidationErrors DockPanel.Dock="Bottom" x:Name="PART_DataValidationErrors" />
+
+          <!-- TODO bind Content -> Header and ContentTemplate -> HeaderTemplate -->
+          <ContentPresenter x:Name="PART_HeaderContentPresenter"
+                            DockPanel.Dock="Top"
+                            TextElement.FontWeight="Normal"
+                            TextElement.Foreground="{DynamicResource TextControlHeaderForeground}"
+                            IsVisible="False"
+                            Margin="{DynamicResource TextBoxTopHeaderMargin}" />
+
+          <Panel IsVisible="{Binding !IsReadOnly, RelativeSource={RelativeSource AncestorType={x:Type CurrencyEntryBox}}}">
+            <Border
+              Name="PART_BorderElement"
+              Background="{TemplateBinding Background}"
+              BorderBrush="{TemplateBinding BorderBrush}"
+              BorderThickness="{TemplateBinding BorderThickness}"
+              MinWidth="{TemplateBinding MinWidth}"
+              MinHeight="{TemplateBinding MinHeight}" />
+
+            <Panel
+              Margin="{TemplateBinding BorderThickness}">
+              <Grid ColumnDefinitions="Auto,*,Auto">
+                <ContentPresenter Grid.Column="0"
+                                  Content="{TemplateBinding InnerLeftContent}" />
+                <Panel x:Name="PART_InnerDockPanel" Grid.Column="1"
+                       Margin="{TemplateBinding Padding}">
+                  <ScrollViewer
+                    HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
+                    VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}">
+                    <DockPanel>
+                      <Panel>
+                        <TextBlock Name="PART_Watermark"
+                                   Opacity="0.5"
+                                   Text="{TemplateBinding Watermark}"
+                                   TextAlignment="{TemplateBinding TextAlignment}"
+                                   TextWrapping="{TemplateBinding TextWrapping}"
+                                   IsVisible="{TemplateBinding Text, Converter={x:Static StringConverters.IsNullOrEmpty}}"
+                                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                   VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                        <DockPanel HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}">
+                          <TextBlock Text="≈"
+                                     IsVisible="{TemplateBinding IsApproximate}"
+                                     Margin="0 0 5 0"
+                                     Opacity="0.5"
+                                     HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                     DockPanel.Dock="Left" />
+
+                          <!-- Current Currency Code -->
+                          <TextBlock Name="PART_CurrencyCode"
+                                     Opacity="0.5"
+                                     Margin="5 0 0 0"
+                                     Text="{TemplateBinding CurrencyCode}"
+                                     IsVisible="{TemplateBinding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                     HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                                     DockPanel.Dock="Right" />
+
+                          <TextPresenter Name="PART_TextPresenter"
+                                         Text="{TemplateBinding Text, Mode=TwoWay}"
+                                         CaretIndex="{TemplateBinding CaretIndex}"
+                                         SelectionStart="{TemplateBinding SelectionStart}"
+                                         SelectionEnd="{TemplateBinding SelectionEnd}"
+                                         TextAlignment="{TemplateBinding TextAlignment}"
+                                         TextWrapping="{TemplateBinding TextWrapping}"
+                                         PasswordChar="{TemplateBinding PasswordChar}"
+                                         RevealPassword="{TemplateBinding RevealPassword}"
+                                         SelectionBrush="{TemplateBinding SelectionBrush}"
+                                         SelectionForegroundBrush="{TemplateBinding SelectionForegroundBrush}"
+                                         CaretBrush="{TemplateBinding CaretBrush}"
+                                         HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                         VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+
+                        </DockPanel>
+                      </Panel>
+                    </DockPanel>
+                  </ScrollViewer>
+                </Panel>
+                <ContentPresenter Grid.Column="2"
+                                  Content="{TemplateBinding InnerRightContent}" />
+              </Grid>
+            </Panel>
+          </Panel>
+        </DockPanel>
+      </ControlTemplate>
+    </Setter>
+
+    <!-- Readonly Template -->
+    <Style Selector="^:readonly">
+      <Setter Property="Template">
+        <ControlTemplate>
+          <DockPanel>
+            <ContentPresenter x:Name="PART_HeaderContentPresenter"
+                              DockPanel.Dock="Top"
+                              TextElement.FontWeight="Normal"
+                              TextElement.Foreground="{DynamicResource TextControlHeaderForeground}"
+                              IsVisible="False"
+                              Margin="{DynamicResource TextBoxTopHeaderMargin}" />
+
+            <Panel>
+              <Border
+                BorderThickness="{TemplateBinding BorderThickness}"
+                MinWidth="{TemplateBinding MinWidth}"
+                MinHeight="{TemplateBinding MinHeight}" />
+              <Panel
+                Margin="{TemplateBinding BorderThickness}">
+                <Panel
+                  Margin="{TemplateBinding Padding}">
+                  <DockPanel>
+                    <StackPanel Orientation="Horizontal">
+                      <TextBlock Margin="0 0 5 0"
+                                 Text="≈"
+                                 IsVisible="{TemplateBinding IsFiat}"
+                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                      <TextPresenter Name="PART_TextPresenter"
+                                     Text="{TemplateBinding Text, Mode=TwoWay}"
+                                     CaretIndex="{TemplateBinding CaretIndex}"
+                                     SelectionStart="{TemplateBinding SelectionStart}"
+                                     SelectionEnd="{TemplateBinding SelectionEnd}"
+                                     TextAlignment="{TemplateBinding TextAlignment}"
+                                     TextWrapping="{TemplateBinding TextWrapping}"
+                                     PasswordChar="{TemplateBinding PasswordChar}"
+                                     RevealPassword="{TemplateBinding RevealPassword}"
+                                     SelectionBrush="{TemplateBinding SelectionBrush}"
+                                     SelectionForegroundBrush="{TemplateBinding SelectionForegroundBrush}"
+                                     CaretBrush="{TemplateBinding CaretBrush}"
+                                     HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                     VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                      <TextBlock Margin="5 0 0 0"
+                                 Text="{TemplateBinding CurrencyCode}"
+                                 IsVisible="{TemplateBinding Text, Converter={x:Static StringConverters.IsNotNullOrEmpty}}"
+                                 HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}"
+                                 VerticalAlignment="{TemplateBinding VerticalContentAlignment}" />
+                    </StackPanel>
+                  </DockPanel>
+                </Panel>
+              </Panel>
+            </Panel>
+          </DockPanel>
+        </ControlTemplate>
+      </Setter>
+    </Style>
+
+    <Style Selector="^/template/ Border#PART_BorderElement">
+      <Setter Property="CornerRadius" Value="4" />
+    </Style>
+
+    <!-- TODO: temporary fix to prevent layout issue when error occurs  -->
+    <Style Selector="^/template/ DataValidationErrors">
+      <Setter Property="MinHeight" Value="21" />
+    </Style>
+
+    <!-- Disabled State -->
+    <Style Selector="^:disabled">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlForegroundDisabled}" />
+    </Style>
+
+    <Style Selector="^:disabled /template/ Border#PART_BorderElement">
+      <Setter Property="Background" Value="{DynamicResource TextControlBackgroundDisabled}" />
+      <Setter Property="BorderBrush" Value="{DynamicResource TextControlBorderBrushDisabled}" />
+    </Style>
+
+    <Style Selector="^:disabled /template/ TextBlock#PART_Watermark">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlPlaceholderForegroundDisabled}" />
+    </Style>
+
+    <!-- PointerOver State-->
+    <Style Selector="^:disabled">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlForegroundPointerOver}" />
+    </Style>
+
+    <Style Selector="^:pointerover /template/ TextBlock#PART_Watermark">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlPlaceholderForegroundPointerOver}" />
+    </Style>
+
+    <!-- Focused State -->
+    <Style Selector="^:focus">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlForegroundFocused}" />
+    </Style>
+
+    <Style Selector="^:focus /template/ TextBlock#PART_Watermark">
+      <Setter Property="Foreground" Value="{DynamicResource TextControlPlaceholderForegroundFocused}" />
+    </Style>
+
+    <Style Selector="^:isrightside">
+      <Setter Property="HorizontalContentAlignment" Value="Right" />
+    </Style>
+
+    <Style Selector="^:isrightside /template/ TextBlock#PART_Watermark">
+      <Setter Property="TextAlignment" Value="Right" />
+    </Style>
+
+    <Style Selector="^:isrightside /template/ TextPresenter#PART_TextPresenter">
+      <Setter Property="TextAlignment" Value="Right" />
+    </Style>
+
+    <!-- Correct caret offset for empty boxes so that it fits nicely with the different watermarks -->
+    <Style Selector="^:empty /template/ TextPresenter#PART_TextPresenter">
+      <Setter Property="Margin" Value="0 0 0 0" />
+    </Style>
+    <Style Selector="^:empty:isfiat /template/ TextPresenter#PART_TextPresenter">
+      <Setter Property="Margin" Value="13 0 0 0" />
+    </Style>
+    <Style Selector="^:empty:isrightside /template/ TextPresenter#PART_TextPresenter">
+      <Setter Property="Margin" Value="0 0 40 0" />
+    </Style>
+    <Style Selector="^:empty:isrightside:isfiat /template/ TextPresenter#PART_TextPresenter">
+      <Setter Property="Margin" Value="0 0 63 0" />
+    </Style>
+
+    <!-- Hide DataValidationErrors by default -->
+    <Style Selector="^/template/ DataValidationErrors#PART_DataValidationErrors">
+      <Setter Property="IsVisible" Value="False" />
+    </Style>
+
+  </ControlTheme>
+
+</ResourceDictionary>

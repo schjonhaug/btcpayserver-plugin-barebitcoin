@@ -1,0 +1,30 @@
+<Styles xmlns="https://github.com/avaloniaui">
+
+  <Style Selector="MenuItem /template/ Viewbox#PART_IconPresenter">
+    <Setter Property="Height" Value="20" />
+    <Setter Property="Width" Value="20" />
+  </Style>
+
+  <Style Selector="PathIcon.new">
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border Background="{TemplateBinding Background}">
+          <Path Fill="{TemplateBinding Foreground}"
+                Data="{TemplateBinding Data}"
+                Stretch="None" />
+        </Border>
+      </ControlTemplate>
+    </Setter>
+  </Style>
+
+  <Style Selector="PathIcon.size24">
+    <Setter Property="Width" Value="24" />
+    <Setter Property="Height" Value="24" />
+  </Style>
+
+  <Style Selector="PathIcon.size28">
+    <Setter Property="Width" Value="28" />
+    <Setter Property="Height" Value="28" />
+  </Style>
+
+</Styles>

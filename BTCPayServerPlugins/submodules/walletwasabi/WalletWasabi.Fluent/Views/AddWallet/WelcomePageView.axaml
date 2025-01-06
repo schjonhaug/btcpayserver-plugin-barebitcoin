@@ -1,0 +1,147 @@
+<UserControl xmlns="https://github.com/avaloniaui"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+             xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+             xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+             xmlns:addWallet="clr-namespace:WalletWasabi.Fluent.ViewModels.AddWallet"
+             mc:Ignorable="d" d:DesignWidth="800"
+             x:Class="WalletWasabi.Fluent.Views.AddWallet.WelcomePageView"
+             x:DataType="addWallet:WelcomePageViewModel"
+             x:CompileBindings="True">
+  <Interaction.Behaviors>
+    <FocusOnAttachedBehavior />
+  </Interaction.Behaviors>
+
+  <UserControl.Styles>
+    <Style Selector="ContentArea /template/ StackPanel#PART_Header">
+      <Setter Property="Height" Value="32" />
+    </Style>
+  </UserControl.Styles>
+
+  <ContentArea EnableCancel="False"
+                        EnableBack="{Binding CanGoBack^}"
+                        EnableNext="True"
+                        ClipToBounds="False"
+                        NextContent="{Binding NextLabel}"
+                        ScrollViewer.VerticalScrollBarVisibility="Disabled">
+
+    <DockPanel LastChildFill="True">
+
+      <!-- TODO: Uncomment in the case there is more than 1 welcome screen. -->
+      <!-- Indicator & Buttons -->
+      <!-- <ListBox HorizontalAlignment="Center" -->
+      <!--          SelectedIndex="{Binding SelectedIndex}" -->
+      <!--          Background="Transparent" -->
+      <!--          IsHitTestVisible="False" -->
+      <!--          DockPanel.Dock="Bottom"> -->
+      <!--   <ListBox.Styles> -->
+      <!--     <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter"> -->
+      <!--       <Setter Property="Background" Value="Transparent" /> -->
+      <!--     </Style> -->
+      <!--     <Style Selector="ListBoxItem:selected /template/ ContentPresenter"> -->
+      <!--       <Setter Property="TextBlock.Foreground" Value="{DynamicResource SystemChromeAltLowColor}" /> -->
+      <!--     </Style> -->
+      <!--     <Style Selector="ListBoxItem"> -->
+      <!--       <Setter Property="Opacity" Value="0.3" /> -->
+      <!--     </Style> -->
+      <!--     <Style Selector="ListBoxItem:selected"> -->
+      <!--       <Setter Property="Opacity" Value="1" /> -->
+      <!--     </Style> -->
+      <!--     <Style Selector="Ellipse"> -->
+      <!--       <Setter Property="Fill" Value="{DynamicResource SystemChromeAltLowColor}" /> -->
+      <!--       <Setter Property="Width" Value="9" /> -->
+      <!--       <Setter Property="Height" Value="9" /> -->
+      <!--     </Style> -->
+      <!--   </ListBox.Styles> -->
+      <!--   <ItemsControl.ItemsPanel> -->
+      <!--     <ItemsPanelTemplate> -->
+      <!--       <StackPanel Orientation="Horizontal" Spacing="5" /> -->
+      <!--     </ItemsPanelTemplate> -->
+      <!--   </ItemsControl.ItemsPanel> -->
+      <!--   <Ellipse /> -->
+      <!-- </ListBox> -->
+
+      <!-- Pages -->
+      <Carousel SelectedIndex="{Binding SelectedIndex}"
+                DockPanel.Dock="Top"
+                Margin="0 10">
+        <Interaction.Behaviors>
+          <ExecuteCommandOnKeyDownBehavior Command="{Binding BackCommand}"
+                                           IsEnabled="{Binding CanGoBack^}" Key="Left" />
+          <ExecuteCommandOnKeyDownBehavior Command="{Binding NextCommand}"
+                                           IsEnabled="{Binding EnableNextKey}" Key="Right" />
+        </Interaction.Behaviors>
+        <Carousel.Styles>
+          <Style Selector="TextBlock.text">
+            <Setter Property="Opacity" Value="0.5" />
+            <Setter Property="FontWeight" Value="Light" />
+            <Setter Property="FontSize" Value="14" />
+          </Style>
+
+          <Style Selector="TextBlock.title2">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+            <Setter Property="FontSize" Value="16" />
+            <Setter Property="Padding" Value="0 4 8 4" />
+          </Style>
+
+          <Style Selector="TextBlock.title1">
+            <Setter Property="TextWrapping" Value="Wrap" />
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="FontSize" Value="31" />
+          </Style>
+
+          <Style Selector="Viewbox.icon">
+            <Setter Property="MaxHeight" Value="50" />
+            <Setter Property="DockPanel.Dock" Value="Bottom" />
+            <Setter Property="HorizontalAlignment" Value="Left" />
+          </Style>
+
+          <Style Selector="Grid TextBlock">
+            <Setter Property="TextAlignment" Value="Left" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+          </Style>
+
+          <Style Selector="Grid StackPanel">
+            <Setter Property="HorizontalAlignment" Value="Center" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Width" Value="230" />
+          </Style>
+        </Carousel.Styles>
+        <Carousel.PageTransition>
+          <PageSlide Duration="0:0:0.5" SlideOutEasing="{StaticResource FluentEasing}"
+                     SlideInEasing="{StaticResource FluentEasing}" />
+        </Carousel.PageTransition>
+
+        <!-- Get started -->
+        <DockPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+          <StackPanel DockPanel.Dock="Bottom" Spacing="10">
+            <TextBlock Text="Welcome to Wasabi Wallet" FontSize="30" HorizontalAlignment="Center" />
+
+            <TextBlock TextAlignment="Center" Text="An easy to use, privacy focused, open source bitcoin wallet." FontWeight="Light" />
+          </StackPanel>
+          <Panel Height="120" HorizontalAlignment="Center" DockPanel.Dock="Bottom" Margin="0 0 0 20">
+            <ExperimentalAcrylicBorder Margin="2">
+              <ExperimentalAcrylicBorder.Material>
+                <ExperimentalAcrylicMaterial BackgroundSource="Digger"
+                                             TintColor="White"
+                                             TintOpacity="0"
+                                             FallbackColor="White"
+                                             MaterialOpacity="0" />
+              </ExperimentalAcrylicBorder.Material>
+            </ExperimentalAcrylicBorder>
+            <Viewbox>
+              <Panel>
+                <Border Width="465.5" Height="465.5" />
+                <Path Fill="{DynamicResource TextControlForeground}" Opacity="0.75"
+                      Data="M 14 37 L 14 452 L 453 452 L 453 189 L 322 189 L 322 37 L 14 37 z " />
+                <Path Fill="#FF77C200" Opacity="0.75" Data="M 322 18 H 458 V 189 H 322 Z" />
+                <Path Fill="{DynamicResource RegionColor}"
+                      Data="M0 0v465.5h465.5V0H0zm363.6 76.1h74.6v73.3h-74.6V76zM91.1 81.6a479.5 479.5 0 0 0 54.2 142.3l6.8 9.5h84a474.6 474.6 0 0 1-43.3-115.2L255 82.9a528 528 0 0 0 55.6 141l6.8 9.5h119.3v58.3h-65c19 20.4 40.6 35.3 59.6 47.5l-51.5 50.2c-25.8-17.7-70.5-50.2-107.1-97.7H209c20.4 17.7 44.8 39.4 58.3 47.5l-54.2 50.2A430 430 0 0 1 96.5 274.1a481 481 0 0 1-69.2-156c23-13.5 40.7-21.6 63.8-36.5z" />
+              </Panel>
+            </Viewbox>
+          </Panel>
+        </DockPanel>
+      </Carousel>
+    </DockPanel>
+  </ContentArea>
+</UserControl>

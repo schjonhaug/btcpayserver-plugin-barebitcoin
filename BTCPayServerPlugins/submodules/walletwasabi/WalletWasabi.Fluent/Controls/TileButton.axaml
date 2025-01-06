@@ -1,0 +1,90 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+  <ControlTheme x:Key="{x:Type TileButton}" TargetType="TileButton">
+
+    <Setter Property="Width" Value="150" />
+    <Setter Property="Height" Value="150" />
+    <Setter Property="ClipToBounds" Value="False" />
+    <Setter Property="BorderThickness" Value="0" />
+    <Setter Property="Background" Value="{DynamicResource OptimizePrivacyOptionSelectedColor}" />
+    <Setter Property="BorderBrush" Value="{DynamicResource BorderColor}" />
+    <Setter Property="Cursor" Value="Hand" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border x:Name="PART_Border"
+                BorderThickness="{TemplateBinding BorderThickness}"
+                BorderBrush="{TemplateBinding BorderBrush}"
+                Background="{TemplateBinding Background}">
+          <DockPanel>
+            <TextBlock x:Name="PART_Text"
+                       Text="{TemplateBinding Text}"
+                       Foreground="{TemplateBinding Foreground}" />
+            <Panel VerticalAlignment="{TemplateBinding VerticalContentAlignment}"
+                   HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}">
+              <PathIcon x:Name="PART_Icon"
+                        Data="{TemplateBinding Icon}"
+                        Width="{TemplateBinding IconSize}"
+                        Height="{TemplateBinding IconSize}" />
+
+              <ContentPresenter x:Name="PART_ContentPresenter"
+                                Content="{TemplateBinding Content}"
+                                Height="{TemplateBinding IconSize}"
+                                Width="{TemplateBinding IconSize}" />
+            </Panel>
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^/template/ PathIcon#PART_Icon">
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0 0 0 15" />
+      <Setter Property="Foreground" Value="{DynamicResource SystemAccentColor}" />
+    </Style>
+
+    <Style Selector="^/template/ ContentPresenter#PART_ContentPresenter">
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+      <Setter Property="Margin" Value="0 0 0 15" />
+    </Style>
+
+    <Style Selector="^/template/ TextBlock#PART_Text">
+      <Setter Property="DockPanel.Dock" Value="Top" />
+      <Setter Property="Margin" Value="10 10 10 15" />
+      <Setter Property="TextWrapping" Value="Wrap" />
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="^/template/ Border#PART_Border">
+      <Setter Property="CornerRadius" Value="{DynamicResource ControlCornerRadius}" />
+      <Setter Property="BoxShadow" Value="{DynamicResource OptimizePrivacyOptionBoxShadow1}" />
+    </Style>
+
+    <!-- Pointerover -->
+    <Style Selector="^:pointerover">
+      <!--<Setter Property="Background" Value="{DynamicResource ButtonBackgroundPointerOver}" />-->
+      <Setter Property="BorderBrush" Value="{DynamicResource ButtonBorderBrushPointerOver}" />
+      <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundPointerOver}" />
+    </Style>
+
+    <!-- Pressed -->
+    <Style Selector="^:pressed">
+      <Setter Property="Foreground" Value="{DynamicResource ButtonForegroundPressed}" />
+      <Setter Property="RenderTransform" Value="scale(0.98)" />
+    </Style>
+
+    <Style Selector="^:pointerover /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="{DynamicResource OptimizePrivacyOptionBoxShadow2}" />
+    </Style>
+
+    <Style Selector="^:pressed /template/ Border#PART_Border">
+      <Setter Property="BoxShadow" Value="0 0 0 #121212" />
+    </Style>
+
+  </ControlTheme>
+
+</ResourceDictionary>

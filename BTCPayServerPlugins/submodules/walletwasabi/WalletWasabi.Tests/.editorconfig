@@ -1,0 +1,10 @@
+# You can learn more about .editorconfig here: https://docs.microsoft.com/en-us/visualstudio/ide/editorconfig-code-style-settings-reference
+root = false
+
+[*.cs]
+
+# RS0030: Do not use banned APIs
+dotnet_diagnostic.RS0030.severity = none
+
+# CA1861: Avoid constant arrays as arguments
+dotnet_diagnostic.CA1861.severity = none

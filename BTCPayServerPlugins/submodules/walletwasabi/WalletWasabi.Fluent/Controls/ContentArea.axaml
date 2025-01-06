@@ -1,0 +1,153 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Design.PreviewWith>
+    <Panel Background="{DynamicResource RegionColor}">
+      <ContentArea Width="500" Height="300"
+                     IsBusy="False"
+                     Title="Add a Wallet"
+                     TopContent="This is the top content"
+                     EnableBack="True"
+                     EnableCancel="True" CancelContent="Cancel" FocusCancel="False"
+                     EnableNext="True" NextContent="Continue" FocusNext="True"
+                     Caption="Type in your Wallet's name and select an option below:">
+        This is the content.
+      </ContentArea>
+    </Panel>
+  </Design.PreviewWith>
+
+  <ControlTheme x:Key="{x:Type ContentArea}" TargetType="ContentArea">
+
+    <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+    <Setter Property="ScrollViewer.VerticalScrollBarVisibility" Value="Auto" />
+    <Setter Property="IsHitTestVisible" Value="{Binding IsActive}" />
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Panel>
+          <Panel IsHitTestVisible="False" Background="{TemplateBinding Background}" />
+          <ProgressRing Name="LoadingRing" IsIndeterminate="True" IsVisible="{TemplateBinding IsBusy}" />
+          <DockPanel Name="MainDockPanel" IsVisible="{Binding !#LoadingRing.IsVisible}">
+
+            <DockPanel DockPanel.Dock="Bottom" x:Name="PART_ButtonArea">
+              <Button Name="PART_CancelButton"
+                      Classes="invisible"
+                      IsVisible="{TemplateBinding EnableCancel}"
+                      Content="{TemplateBinding CancelContent}"
+                      DockPanel.Dock="Left" Command="{Binding CancelCommand}">
+                <Interaction.Behaviors>
+                  <FocusOnAttachedBehavior
+                    IsEnabled="{Binding FocusCancel, RelativeSource={RelativeSource TemplatedParent}}" />
+                </Interaction.Behaviors>
+              </Button>
+              
+                <StackPanel Orientation="Horizontal" Spacing="30" DockPanel.Dock="Right">
+                  <Button Name="PART_SkipButton"
+                          IsVisible="{TemplateBinding EnableSkip}"
+                          Content="{TemplateBinding SkipContent}"
+                          Command="{Binding SkipCommand}"
+                          Classes="activeHyperLink skip"
+                          VerticalAlignment="Center" />
+                  <Button Name="PART_NextButton" Classes="action"
+                          IsVisible="{TemplateBinding EnableNext}"
+                          Content="{TemplateBinding NextContent}"
+                          Command="{Binding NextCommand}"
+                          IsDefault="{Binding IsActive}">
+                    <Interaction.Behaviors>
+                      <FocusOnAttachedBehavior
+                        IsEnabled="{Binding FocusNext, RelativeSource={RelativeSource TemplatedParent}}" />
+                    </Interaction.Behaviors>
+                  </Button>
+                </StackPanel>
+                <ContentPresenter Content="{TemplateBinding BottomContent}"
+                                  x:Name="PART_BottomContentPresenter" />
+            </DockPanel>
+
+            <Panel DockPanel.Dock="Top">
+              <Panel IsHitTestVisible="False" Background="{TemplateBinding HeaderBackground}" />
+              <StackPanel Name="PART_Header" Spacing="10">
+                <DockPanel>
+                  <Button Name="PART_BackButton"
+                          Classes="plain"
+                          Command="{Binding BackCommand}"
+                          IsVisible="{TemplateBinding EnableBack}">
+                    <Interaction.Behaviors>
+                      <ButtonExecuteCommandOnKeyDownBehavior IsEnabled="{Binding IsActive}" Key="Back" />
+                      <ButtonExecuteCommandOnKeyDownBehavior IsEnabled="{Binding IsActive}" Key="Escape" />
+                    </Interaction.Behaviors>
+                    <PathIcon Data="{StaticResource arrow_left_regular}" Width="16" />
+                  </Button>
+                  <DockPanel>
+                    <ContentPresenter DockPanel.Dock="Right" Name="PART_TopContentPresenter" Content="{TemplateBinding TopContent}" />
+                    <ContentPresenter Name="PART_TitlePresenter" Content="{TemplateBinding Title}" />
+                  </DockPanel>
+                </DockPanel>
+                <ContentPresenter Name="PART_CaptionPresenter" Content="{TemplateBinding Caption}" />
+                <Panel Height="6" IsVisible="{Binding !EnableBack}" />
+              </StackPanel>
+            </Panel>
+
+            <ScrollViewer x:Name="PART_ScrollViewer" ClipToBounds="{TemplateBinding ClipToBounds}"
+                          HorizontalScrollBarVisibility="{TemplateBinding (ScrollViewer.HorizontalScrollBarVisibility)}"
+                          VerticalScrollBarVisibility="{TemplateBinding (ScrollViewer.VerticalScrollBarVisibility)}">
+              <ScrollViewer.Styles>
+                <Style Selector="ScrollViewer /template/ ScrollContentPresenter">
+                  <Setter Property="ClipToBounds" Value="{Binding $parent[ScrollViewer].ClipToBounds}" />
+                </Style>
+              </ScrollViewer.Styles>
+              <ContentPresenter Name="PART_ContentPresenter"
+                              ClipToBounds="{TemplateBinding ClipToBounds}"
+                              BorderBrush="{TemplateBinding BorderBrush}"
+                              BorderThickness="{TemplateBinding BorderThickness}"
+                              ContentTemplate="{TemplateBinding ContentTemplate}"
+                              Content="{TemplateBinding Content}"
+                              Padding="{TemplateBinding Padding}"
+                              VerticalContentAlignment="{TemplateBinding VerticalContentAlignment}"
+                              HorizontalContentAlignment="{TemplateBinding HorizontalContentAlignment}" />
+            </ScrollViewer>
+          </DockPanel>
+        </Panel>
+      </ControlTemplate>
+    </Setter>
+
+    <Style Selector="^/template/ StackPanel#PART_Header">
+      <Setter Property="Margin" Value="31 0 31 0" />
+    </Style>
+
+    <Style Selector="^/template/ ScrollViewer#PART_ScrollViewer">
+      <Setter Property="Margin" Value="31 11 31 21" />
+    </Style>
+
+    <Style Selector="^/template/ DockPanel#PART_ButtonArea">
+      <Setter Property="Margin" Value="31 0 31 10" />
+    </Style>
+
+    <Style Selector="^/template/ Button#PART_BackButton">
+      <Setter Property="Margin" Value="-31,0,0,0"/>
+    </Style>
+    
+    <Style Selector="^/template/ ContentPresenter#PART_TitlePresenter">
+      <Setter Property="TextElement.Foreground" Value="{DynamicResource TextControlForeground}" />
+      <Setter Property="TextElement.FontSize" Value="{DynamicResource FontSizeH3}" />
+    </Style>
+
+    <!-- Top ContentPresenter-->
+    <Style Selector="^/template/ ContentPresenter#PART_TopContentPresenter">
+      <Setter Property="HorizontalContentAlignment" Value="Right" />
+    </Style>
+
+    <!-- Stretch Top Content -->
+    <Style Selector="^.StretchTopContent /template/ ContentPresenter#PART_TopContentPresenter">
+      <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+    </Style>
+
+    <!-- Bottom ContentPresenter -->
+    <Style Selector="^/template/ ContentPresenter#PART_BottomContentPresenter">
+      <Setter Property="HorizontalAlignment" Value="Center" />
+      <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <Style Selector="^/template/ ProgressRing#LoadingRing">
+      <Setter Property="Width" Value="100" />
+      <Setter Property="Height" Value="100" />
+    </Style>
+  </ControlTheme>
+</ResourceDictionary>

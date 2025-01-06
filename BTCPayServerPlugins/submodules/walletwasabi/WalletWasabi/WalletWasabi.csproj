@@ -1,0 +1,115 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+	<PropertyGroup>
+		<DisableImplicitNamespaceImports>true</DisableImplicitNamespaceImports>
+		<TargetLatestRuntimePatch>true</TargetLatestRuntimePatch>
+		<NoWarn>1701;1702;1705;1591;1573;CA1031;CA1822</NoWarn>
+		<AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+		<RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+		<DisableImplicitNuGetFallbackFolder>true</DisableImplicitNuGetFallbackFolder>
+		<PathMap>$(MSBuildProjectDirectory)\=WalletWasabi</PathMap>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
+		<DocumentationFile>bin\Debug\net8.0\WalletWasabi.xml</DocumentationFile>
+	</PropertyGroup>
+
+	<PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|AnyCPU'">
+		<DocumentationFile></DocumentationFile>
+		<DebugType>none</DebugType>
+		<DebugSymbols>false</DebugSymbols>
+		<ErrorReport>none</ErrorReport>
+	</PropertyGroup>
+
+	<Target Name="WriteMetadata" BeforeTargets="PrepareForBuild">
+		<ItemGroup>
+			<AssemblyMetadata Include="CommitHash" Value="$(CommitHash)" />
+		</ItemGroup>
+	</Target>
+
+	<ItemGroup><!-- TODO: Workaround for incompatible package Microsoft.AspNetCore.Mvc.NewtonsoftJson -->
+<!--		<PackageReference Include="Microsoft.AspNetCore.WebUtilities" />-->
+<!--		<PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />-->
+<!--		<PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />-->
+<!--		<PackageReference Include="Microsoft.Extensions.Http" />-->
+<!--		<PackageReference Include="NNostr.Client" />-->
+<!--		<PackageReference Include="System.IO.Pipelines" />-->
+<!--		<PackageReference Include="Microsoft.Data.Sqlite" />-->
+<!--		<PackageReference Include="Microsoft.Win32.SystemEvents" />-->
+<!--		<PackageReference Include="NBitcoin" />-->
+<!--		<PackageReference Include="System.Text.Json" />-->
+<!--		<PackageReference Include="WabiSabi" />-->
+	
+	  <PackageReference Include="Microsoft.AspNetCore.WebUtilities" />
+	
+	  <PackageReference Include="Microsoft.Data.Sqlite.Core" />
+	
+	  <PackageReference Include="Microsoft.Extensions.Caching.Abstractions" />
+	
+	  <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+	
+	  <PackageReference Include="Microsoft.Extensions.Http" />
+	
+	  <PackageReference Include="Microsoft.Win32.SystemEvents" />
+	
+	  <PackageReference Include="NBitcoin" />
+	
+	  <PackageReference Include="NBitcoin.Secp256k1" />
+	
+	  <PackageReference Include="Newtonsoft.Json" />
+	
+	  <PackageReference Include="NNostr.Client" />
+	
+	  <PackageReference Include="WabiSabi" />
+	</ItemGroup>
+
+	<ItemGroup>
+		<None Update="Legal\Assets\LegalDocumentsWw1.txt">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Legal\Assets\LegalDocumentsWw2.txt">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\win64\Tor\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\lin64\Tor\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\osx64\Tor\**\*">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\lin64\bitcoind">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\osx64\bitcoind">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\win64\bitcoind.exe">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\lin64\hwi">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\osx64\hwi">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Microservices\Binaries\win64\hwi.exe">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Tor\Geoip\geoip">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="Tor\Geoip\geoip6">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+		<None Update="BuyAnything\Data\Countries.json">
+			<CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+		</None>
+	</ItemGroup>
+
+	<ItemGroup>
+		<RuntimeHostConfigurationOption Include="System.Globalization.Invariant" Value="true" />
+	</ItemGroup>
+
+</Project>

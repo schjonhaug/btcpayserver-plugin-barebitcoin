@@ -1,0 +1,51 @@
+<Styles xmlns="https://github.com/avaloniaui"
+        xmlns:sys="using:System"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Styles.Resources>
+    <sys:Double x:Key="IconElementThemeHeight">16</sys:Double>
+    <Easing x:Key="FluentEasing">0.4,0,0.6,1</Easing>
+    <KeySpline x:Key="FluentKeySpline">0.4,0,0.6,1</KeySpline>
+    <FontFamily x:Key="MonospacedFont">avares://WalletWasabi.Fluent/Assets/Fonts#Roboto Mono</FontFamily>
+    <FontFamily x:Key="WasabiLogoTextFont">avares://WalletWasabi.Fluent/Assets/Fonts#Objectivity</FontFamily>
+    <sys:Int32 x:Key="MaxLabelLength">50</sys:Int32>
+    <x:Double x:Key="LabelMaxWidth">120</x:Double>
+    <x:String x:Key="LabelsWatermarkText">Person or Company i.e. Alice, Bob, Pizza Inc</x:String>
+  </Styles.Resources>
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ContextMenu.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Button.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Checkmark.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ContentArea.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Dialog.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/FontSizes.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/IconButton.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/InfoMessage.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Label.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/NavBarItem.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/OptionButton.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/PathIcon.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Separator.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/SplitView.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/TextBox.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/NotificationCard.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/HyperlinkButton.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/CurrencyEntryBox.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/TreeDataGrid.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/RadioButton.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/SettingsLayout.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/Slider.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ToolTip.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/FlyoutPresenter.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ToggleSwitch.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ScrollViewer.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/CuedScrollViewer.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/PrivacyContentControl.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/TileButton.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/PreviewItem.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/TagsBox.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/MenuItem.axaml" />
+  <!--TODO @SuperJMN: Convert this to control? Is it worth the effort?-->
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/CopyablePasswordTextBox.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ScrollBar.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/ComboBoxItem.axaml" />
+  <StyleInclude Source="avares://WalletWasabi.Fluent/Styles/TabControl.axaml" />
+</Styles>

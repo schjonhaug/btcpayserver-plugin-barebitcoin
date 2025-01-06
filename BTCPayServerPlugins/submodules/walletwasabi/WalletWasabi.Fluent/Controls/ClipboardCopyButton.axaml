@@ -1,0 +1,20 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Design.PreviewWith>
+    <ClipboardCopyButton Height="100" Width="200" />
+  </Design.PreviewWith>
+
+  <ControlTheme x:Key="{x:Type ClipboardCopyButton}" TargetType="ClipboardCopyButton">
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <AnimatedButton x:Name="CopyButton" Command="{TemplateBinding CopyCommand}"
+                          NormalIcon="{StaticResource copy_regular}"
+                          ClickIcon="{StaticResource copy_confirmed}"
+                          InitialOpacity="0.6" />
+      </ControlTemplate>
+    </Setter>
+
+  </ControlTheme>
+
+</ResourceDictionary>

@@ -1,0 +1,34 @@
+<ResourceDictionary xmlns="https://github.com/avaloniaui"
+                    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+  <Design.PreviewWith>
+    <TileControl Height="140" Width="310" Title="Tile">
+      <TileControl.BottomContent>
+        <Button VerticalAlignment="Stretch">Bye</Button>
+      </TileControl.BottomContent>
+      <Button VerticalAlignment="Bottom">hello</Button>
+    </TileControl>
+  </Design.PreviewWith>
+
+  <ControlTheme x:Key="{x:Type TileControl}" TargetType="TileControl">
+
+    <Setter Property="BottomPartHeight" Value="22" />
+
+    <Setter Property="Template">
+      <ControlTemplate>
+        <Border CornerRadius="15" Background="{DynamicResource TileRegionColor}"
+                Margin="6 6 6 10" Padding="12">
+          <Border.Effect>
+            <DynamicResource ResourceKey="TileDropShadowEffect" />
+          </Border.Effect>
+          <DockPanel>
+            <TextBlock Text="{TemplateBinding Title}" Opacity="0.6" FontWeight="Bold" DockPanel.Dock="Top" Classes="h8" />
+            <ContentPresenter Content="{TemplateBinding BottomContent}" DockPanel.Dock="Bottom" IsVisible="{TemplateBinding IsBottomContentVisible}" />
+            <ContentPresenter Name="PART_Content" Content="{TemplateBinding Content}" />
+          </DockPanel>
+        </Border>
+      </ControlTemplate>
+    </Setter>
+
+  </ControlTheme>
+
+</ResourceDictionary>
