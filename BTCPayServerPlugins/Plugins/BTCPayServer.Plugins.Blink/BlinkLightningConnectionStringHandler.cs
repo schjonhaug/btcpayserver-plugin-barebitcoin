@@ -48,7 +48,7 @@ public class BlinkLightningConnectionStringHandler : ILightningConnectionStringH
             return null;
         }
 
-        bool allowInsecure = false;
+        bool allowInsecure = true; //TODO: was false
         if (kv.TryGetValue("allowinsecure", out var allowinsecureStr))
         {
             var allowedValues = new[] {"true", "false"};
