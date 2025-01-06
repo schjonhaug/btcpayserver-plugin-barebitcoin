@@ -8,12 +8,12 @@ using Network = NBitcoin.Network;
 
 namespace BTCPayServer.Plugins.BareBitcoin;
 
-public class BlinkLightningConnectionStringHandler : ILightningConnectionStringHandler
+public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionStringHandler
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
 
-    public BlinkLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
@@ -82,7 +82,7 @@ public class BlinkLightningConnectionStringHandler : ILightningConnectionStringH
         client.BaseAddress = uri;
 
         kv.TryGetValue("wallet-id", out var walletId);
-        var bclient = new BlinkLightningClient(apiKey, uri, walletId, network, client, _loggerFactory.CreateLogger($"{nameof(BlinkLightningClient)}:{walletId}"));
+        var bclient = new BareBitcoinLightningClient(apiKey, uri, walletId, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}"));
         (Network Network, string DefaultWalletId, string DefaultWalletCurrency) res;
         try
         {
@@ -109,7 +109,7 @@ public class BlinkLightningConnectionStringHandler : ILightningConnectionStringH
         {
             bclient.WalletId = res.DefaultWalletId;
             bclient.WalletCurrency = res.DefaultWalletCurrency;
-            bclient.Logger = _loggerFactory.CreateLogger($"{nameof(BlinkLightningClient)}:{walletId}");
+            bclient.Logger = _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}");
         }
         else
         {

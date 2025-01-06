@@ -23,7 +23,7 @@ using Network = NBitcoin.Network;
 
 namespace BTCPayServer.Plugins.BareBitcoin;
 
-public class BlinkLightningClient : ILightningClient
+public class BareBitcoinLightningClient : ILightningClient
 {
     private readonly string _apiKey;
     private readonly Uri _apiEndpoint;
@@ -39,7 +39,7 @@ public class BlinkLightningClient : ILightningClient
     {
         [JsonProperty("X-API-KEY")] public string ApiKey { get; set; }
     }
-    public BlinkLightningClient(string apiKey, Uri apiEndpoint, string walletId, Network network, HttpClient httpClient, ILogger logger)
+    public BareBitcoinLightningClient(string apiKey, Uri apiEndpoint, string walletId, Network network, HttpClient httpClient, ILogger logger)
     {
         _apiKey = apiKey;
         _apiEndpoint = apiEndpoint;
@@ -405,11 +405,11 @@ expiresIn = (int)createInvoiceRequest.Expiry.TotalMinutes
 
     public class BlinkListener : ILightningInvoiceListener
     {
-        private readonly BlinkLightningClient _lightningClient;
+        private readonly BareBitcoinLightningClient _lightningClient;
         private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
         private readonly IDisposable _subscription;
 
-        public BlinkListener(GraphQLHttpClient httpClient, BlinkLightningClient lightningClient, ILogger logger)
+        public BlinkListener(GraphQLHttpClient httpClient, BareBitcoinLightningClient lightningClient, ILogger logger)
         {
             try
             {

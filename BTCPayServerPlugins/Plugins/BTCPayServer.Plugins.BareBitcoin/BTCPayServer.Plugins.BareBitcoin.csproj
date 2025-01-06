@@ -37,7 +37,7 @@
 
 
     <ItemGroup>
-      <AdditionalFiles Include="Views\Shared\Blink\LNPaymentMethodSetupTab.cshtml" />
+      <AdditionalFiles Include="Views\Shared\BareBitcoin\LNPaymentMethodSetupTab.cshtml" />
     </ItemGroup>
 
     <ItemGroup>
