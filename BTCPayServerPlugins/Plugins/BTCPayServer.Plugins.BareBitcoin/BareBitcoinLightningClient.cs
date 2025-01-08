@@ -551,7 +551,7 @@ query GetNetworkAndDefaultWallet {
 
 
 
-    public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = new())
+    public async Task<LightningNodeBalance> GetBalanceBLINKDELETE(CancellationToken cancellation = new())
     {
         var request = new GraphQLRequest
         {
@@ -725,7 +725,7 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
 
 
 
-    public async Task<LightningNodeBalance> GetBalanceBareBitcoin(CancellationToken cancellation = new())
+    public async Task<LightningNodeBalance> GetBalance(CancellationToken cancellation = new())
     {
         try 
         {
@@ -735,7 +735,23 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
             
             // Parse response and convert to LightningNodeBalance
             // You'll need to adjust this based on the actual response format
-            return new LightningNodeBalance(); 
+             
+
+            Logger.LogInformation("Creating LightningNodeBalance response");
+            var balance = new LightningNodeBalance()
+            {
+                OffchainBalance = new OffchainBalance()
+                {
+                    Local = LightMoney.Satoshis((long)12345)
+                }
+            };
+            Logger.LogInformation("Created balance response with local balance: {LocalBalance} sats", 12345);
+            return balance;
+
+        
+
+
+
         }
         catch (Exception ex)
         {

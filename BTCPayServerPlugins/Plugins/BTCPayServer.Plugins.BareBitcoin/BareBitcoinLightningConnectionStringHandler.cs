@@ -88,57 +88,16 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         try
             {
-                bclient.GetBalanceBareBitcoin().GetAwaiter().GetResult();
-            }
-            catch (Exception e)
-            {
-                error = "GetBalanceBareBitcoin failed";
-                return null;
-            }
-      
-      
-      
-       /* (Network Network, string DefaultWalletId, string DefaultWalletCurrency) res;
-        try
-        {
-            res = bclient.GetBalanceBareBitcoin().GetAwaiter().GetResult();
-            //res = bclient.GetNetworkAndDefaultWallet().GetAwaiter().GetResult();
-            if (res.Network != network)
-            {
-                error = $"The wallet is not on the right network ({res.Network.Name} instead of {network.Name})";
-                return null;
-            }
-
-            if (walletId is null && string.IsNullOrEmpty(res.DefaultWalletId))
-            {
-                error = $"The wallet-id is not set and no default wallet is set";
-                return null;
-            }
-        }
-        catch (Exception e)
-        {
-            error = $"Invalid server or api key";
-            return null;
-        }
-
-        if (walletId is null)
-        {
-            bclient.WalletId = res.DefaultWalletId;
-            bclient.WalletCurrency = res.DefaultWalletCurrency;
-            bclient.Logger = _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}");
-        }
-        else
-        {
-            try
-            {
                 bclient.GetBalance().GetAwaiter().GetResult();
             }
             catch (Exception e)
             {
-                error = "Invalid wallet id";
+                error = "GetBalance failed";
                 return null;
             }
-        }*/
+      
+      
+       
 
         return bclient;
     }
