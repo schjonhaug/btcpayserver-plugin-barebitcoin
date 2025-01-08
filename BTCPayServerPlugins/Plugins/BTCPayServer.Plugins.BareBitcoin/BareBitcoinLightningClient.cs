@@ -551,44 +551,7 @@ query GetNetworkAndDefaultWallet {
 
 
 
-    public async Task<LightningNodeBalance> GetBalanceBLINKDELETE(CancellationToken cancellation = new())
-    {
-        var request = new GraphQLRequest
-        {
-            Query = @"
-query GetWallet($walletId: WalletId!) {
-  me {
-    defaultAccount {
-      walletById(walletId: $walletId) {
-        id
-        balance
-        walletCurrency
-      }
-    }
-  }
-}",
-            OperationName = "GetWallet",
-            Variables = new {
-                walletId = WalletId
-            }
-        };
-        
-        var response = await  _client.SendQueryAsync<dynamic>(request,  cancellation);
-
-        WalletCurrency = response.Data.me.defaultAccount.walletById.walletCurrency;
-        if (response.Data.me.defaultAccount.walletById.walletCurrency == "BTC")
-        {
-            return new LightningNodeBalance()
-            {
-                OffchainBalance = new OffchainBalance()
-                {
-                    Local = LightMoney.Satoshis((long)response.Data.me.defaultAccount.walletById.balance)
-                }
-            };
-        }
-
-        return new LightningNodeBalance();
-    }
+    
 
     public async Task<PayResponse> Pay(PayInvoiceParams payParams,
         CancellationToken cancellation = new CancellationToken())
