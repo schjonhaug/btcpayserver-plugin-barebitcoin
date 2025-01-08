@@ -733,25 +733,38 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
             var response = await MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
             Logger.LogInformation("Received balance response: {response}", response);
             
-            // Parse response and convert to LightningNodeBalance
-            // You'll need to adjust this based on the actual response format
-             
+            // Parse response according to OpenAPI spec
+            var accounts = JObject.Parse(response)["accounts"] as JArray;
+            if (accounts == null || !accounts.Any())
+            {
+                Logger.LogWarning("No bitcoin accounts found in response");
+                return new LightningNodeBalance();
+            }
 
-            Logger.LogInformation("Creating LightningNodeBalance response");
-            var balance = new LightningNodeBalance()
+            // If we have an accountId, find that specific account
+            var account = _accountId != null 
+                ? accounts.FirstOrDefault(a => a["id"]?.ToString() == _accountId)
+                : accounts.First();
+
+            if (account == null)
+            {
+                Logger.LogWarning("Account {AccountId} not found in response", _accountId);
+                return new LightningNodeBalance();
+            }
+
+            // Get availableBtc and convert to satoshis (1 BTC = 100,000,000 sats)
+            var availableBtc = account["availableBtc"]?.Value<double>() ?? 0;
+            var satoshis = (long)(availableBtc * 100_000_000);
+
+            Logger.LogInformation("Creating LightningNodeBalance response with {AvailableBtc} BTC ({Satoshis} sats)", availableBtc, satoshis);
+            
+            return new LightningNodeBalance()
             {
                 OffchainBalance = new OffchainBalance()
                 {
-                    Local = LightMoney.Satoshis((long)12345)
+                    Local = LightMoney.Satoshis(satoshis)
                 }
             };
-            Logger.LogInformation("Created balance response with local balance: {LocalBalance} sats", 12345);
-            return balance;
-
-        
-
-
-
         }
         catch (Exception ex)
         {

@@ -21,6 +21,7 @@ namespace BTCPayServer.Plugins.BareBitcoin
             applicationBuilder.AddUIExtension("ln-payment-method-setup-tab", "BareBitcoin/LNPaymentMethodSetupTab");
             applicationBuilder.AddSingleton<ILightningConnectionStringHandler>(provider => provider.GetRequiredService<BareBitcoinLightningConnectionStringHandler>());
             applicationBuilder.AddSingleton<BareBitcoinLightningConnectionStringHandler>();
+            applicationBuilder.AddSingleton<ISwaggerProvider, BareBitcoinSwaggerProvider>();
 
             base.Execute(applicationBuilder);
         }
