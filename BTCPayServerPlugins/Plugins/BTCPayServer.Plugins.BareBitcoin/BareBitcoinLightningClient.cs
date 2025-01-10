@@ -31,14 +31,13 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly string _publicKey;
     private readonly string _accountId; 
     private readonly Uri _apiEndpoint;
-    private readonly string _apiKey; // TODO Delete
+
    
 
     public string? WalletCurrency { get; set; }
 
     private readonly Network _network;
     public ILogger Logger;
-    private readonly GraphQLHttpClient _client;
 
     public class BlinkConnectionInit
     {
@@ -46,8 +45,7 @@ public class BareBitcoinLightningClient : ILightningClient
     }
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
     {
-        _apiKey = "TODO-DELETE";
-        var apiKey = "TODO-DELETE";
+      
         _privateKey = privateKey;
         _publicKey = publicKey;
         _accountId = accountId;
@@ -55,22 +53,7 @@ public class BareBitcoinLightningClient : ILightningClient
         _apiEndpoint = apiEndpoint;
         _network = network;
         Logger = logger;
-        _client = new GraphQLHttpClient(new GraphQLHttpClientOptions() {EndPoint = _apiEndpoint,
-            WebSocketEndPoint =
-                new Uri("wss://" + _apiEndpoint.Host.Replace("api.", "ws.") + _apiEndpoint.PathAndQuery),
-            WebSocketProtocol = WebSocketProtocols.GRAPHQL_TRANSPORT_WS,
-            ConfigureWebSocketConnectionInitPayload = options => new BlinkConnectionInit() {ApiKey = apiKey},
-            ConfigureWebsocketOptions =
-                _ => { }
-        }, new NewtonsoftJsonSerializer(settings =>
-        {
-            if (settings.ContractResolver is CamelCasePropertyNamesContractResolver
-                camelCasePropertyNamesContractResolver)
-            {
-                camelCasePropertyNamesContractResolver.NamingStrategy.OverrideSpecifiedNames = false;
-                camelCasePropertyNamesContractResolver.NamingStrategy.ProcessDictionaryKeys = false;
-            }
-        }), httpClient);
+        
         
         
     }
@@ -85,36 +68,11 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
-        var reques = new GraphQLRequest
-        {
-            Query = @"
-query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
-  me {
-    defaultAccount {
-      walletById(walletId: $walletId) {
-        invoiceByPaymentHash(paymentHash: $paymentHash) {
-          createdAt
-          paymentHash
-          paymentRequest
-          paymentSecret
-          paymentStatus
-        }
-      }
-    }
-  }
-}",
-            OperationName = "InvoiceByPaymentHash",
-            Variables = new
-            {
-               // walletId = WalletId,
-                paymentHash = invoiceId
-            }
-        };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-        
 
-        return response.Data is null ? null : ToInvoice(response.Data.me.defaultAccount.walletById.invoiceByPaymentHash);
-    }
+
+        throw new NotImplementedException();
+        
+         }
 
     public LightningInvoice? ToInvoice(JObject invoice)
     {
@@ -154,91 +112,15 @@ query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListInvoices(request: {request})", request);
-        var reques = new GraphQLRequest
-        {
-            Query = @"
-query Invoices($walletId: WalletId!) {
-  me {
-    defaultAccount {
-      walletById(walletId: $walletId) {
-        invoices {
-          edges {
-            node {
-              createdAt
-              paymentHash
-              paymentRequest
-              paymentSecret
-              paymentStatus
-              ... on LnInvoice {
-                satoshis
-              }
-            }
-          }
-        }
-      }
+        throw new NotImplementedException();
     }
-  }
-}",
-            OperationName = "Invoices",
-            Variables = new
-            {
-             //   walletId = WalletId
-            }
-        };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-
-        var result = ((JArray)response.Data.me.defaultAccount.walletById.invoices.edges).Select(o => ToInvoice((JObject) o["node"] )).Where(o => o is not null || request.PendingOnly is not true || o.Status == LightningInvoiceStatus.Unpaid).ToArray();
-        return (LightningInvoice[]) result;
-    }
+    
 
     public async Task<LightningPayment?> GetPayment(string paymentHash,
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetPayment(paymentHash: {paymentHash})", paymentHash);
-        var reques = new GraphQLRequest
-        {
-            Query = @"
-query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
-  me {
-    defaultAccount {
-      walletById(walletId: $walletId) {
-        transactionsByPaymentHash(paymentHash: $paymentHash) {
-          createdAt
-          direction
-          id
-          initiationVia {
-            ... on InitiationViaLn {
-              paymentHash
-              paymentRequest
-            }
-          }
-          memo
-          settlementAmount
-          settlementCurrency
-          settlementVia {
-            ... on SettlementViaLn {
-              preImage
-            }
-            ... on SettlementViaIntraLedger {
-              preImage
-            }
-          }
-          status
-        }
-      }
-    }
-  }
-}",
-            OperationName = "TransactionsByPaymentHash",
-            Variables = new
-            {
-             //   walletId = WalletId,
-                paymentHash = paymentHash
-            }
-        };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-        var item = (JArray) response.Data.me.defaultAccount.walletById.transactionsByPaymentHash;
-        return item.Any()? ToLightningPayment((JObject)item.First()): null;
+        throw new NotImplementedException();
     }
 
     public LightningPayment? ToLightningPayment(JObject transaction)
@@ -282,56 +164,7 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListPayments(request: {request})", request);
-        var reques = new GraphQLRequest
-        {
-            Query = @"
-query Transactions($walletId: WalletId!) {
-  me {
-    defaultAccount {
-      walletById(walletId: $walletId) {
-        transactions {
-          edges {
-            node {
-          createdAt
-          direction
-          id
-          initiationVia {
-            ... on InitiationViaLn {
-              paymentHash
-              paymentRequest
-            }
-          }
-          memo
-          settlementAmount
-          settlementCurrency
-          settlementVia {
-            ... on SettlementViaLn {
-              preImage
-            }
-            ... on SettlementViaIntraLedger {
-              preImage
-            }
-          }
-          status
-            }
-          }
-        }
-      }
-    }
-  }
-}",
-            OperationName = "Transactions",
-            Variables = new
-            {
-             //   walletId = WalletId
-            }
-        };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-        
-            
-            
-        var result = ((JArray)response.Data.me.defaultAccount.walletById.transactions.edges).Select(o => ToLightningPayment((JObject) o["node"])).Where(o => o is not null && (request.IncludePending is not true || o.Status!= LightningPaymentStatus.Pending)).ToArray();
-        return (LightningPayment[]) result;
+        throw new NotImplementedException();
     }
 
     public async Task<LightningInvoice> CreateInvoice(LightMoney amount, string description, TimeSpan expiry,
@@ -346,80 +179,13 @@ query Transactions($walletId: WalletId!) {
         CancellationToken cancellation = new())
     {
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
-        string query;
-        
-        query = WalletCurrency?.Equals("btc", StringComparison.InvariantCultureIgnoreCase) is not true ? @"
-mutation lnInvoiceCreate($input: LnUsdInvoiceBtcDenominatedCreateOnBehalfOfRecipientInput!) {
-  lnUsdInvoiceBtcDenominatedCreateOnBehalfOfRecipient(input: $input) {
-    invoice {
-      createdAt
-      paymentHash
-      paymentRequest
-      paymentSecret
-      paymentStatus
-      satoshis
-    },
-    errors{
-      message
-    }
-  }
-}" : @"
-mutation lnInvoiceCreate($input: LnInvoiceCreateOnBehalfOfRecipientInput!) {
-  lnInvoiceCreateOnBehalfOfRecipient(input: $input) {
-    invoice {
-      createdAt
-      paymentHash
-      paymentRequest
-      paymentSecret
-      paymentStatus
-      satoshis
-    },
-    errors{
-      message
-    }
-  }
-}";
-        
-        var reques = new GraphQLRequest
-        {
-            Query = query,
-            OperationName = "lnInvoiceCreate",
-            Variables = new
-            {
-                input = new
-                {
-                 //   recipientWalletId = WalletId,
-                    memo = createInvoiceRequest.Description,
-                    descriptionHash = createInvoiceRequest.DescriptionHash?.ToString(),
-                    amount = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi),
-expiresIn = (int)createInvoiceRequest.Expiry.TotalMinutes
-                    
-                }
-            }
-        };
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-        var inv = (WalletCurrency?.Equals("btc", StringComparison.InvariantCultureIgnoreCase) is not true
-            ? response.Data.lnUsdInvoiceBtcDenominatedCreateOnBehalfOfRecipient.invoice
-            : response.Data.lnInvoiceCreateOnBehalfOfRecipient.invoice)as JObject;
-
-        if (inv is null)
-        {
-            var errors = (WalletCurrency?.Equals("btc", StringComparison.InvariantCultureIgnoreCase) is not true
-                ? response.Data.lnUsdInvoiceBtcDenominatedCreateOnBehalfOfRecipient.errors
-                : response.Data.lnInvoiceCreateOnBehalfOfRecipient.errors) as JArray;
-
-            if (errors.Any())
-            {
-                throw new Exception(errors.First()["message"].ToString());
-            }
-        }
-        return ToInvoice(inv);
+        throw new NotImplementedException();
     }
 
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
-        return new BlinkListener(_client, this, Logger);
+        throw new NotImplementedException();
     }
 
     public class BlinkListener : ILightningInvoiceListener
@@ -514,42 +280,6 @@ expiresIn = (int)createInvoiceRequest.Expiry.TotalMinutes
             throw new Exception("Stream disconnected, cannot await invoice");
         }
     }
-    public async Task<(Network Network, string DefaultWalletId, string DefaultWalletCurrency)> GetNetworkAndDefaultWallet(CancellationToken cancellation =default)
-    {
-        Logger.LogInformation("GetNetworkAndDefaultWallet()");
-        var reques = new GraphQLRequest
-        {
-            Query = @"
-query GetNetworkAndDefaultWallet {
-  globals {
-    network
-  }
-  me {
-    defaultAccount {
-      defaultWallet{
-        id
-        currency
-      }
-    }
-  }
-}",
-            OperationName = "GetNetworkAndDefaultWallet"
-        };
-        
-        var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
-
-        var defaultWalletId = (string) response.Data.me.defaultAccount.defaultWallet.id;
-        var defaultWalletCurrency = (string) response.Data.me.defaultAccount.defaultWallet.currency;
-        var network = response.Data.globals.network.ToString() switch
-        {
-            "mainnet" => Network.Main,
-            "testnet" => Network.TestNet,
-            "signet" => Network.TestNet,
-            "regtest" => Network.RegTest,
-            _ => throw new ArgumentOutOfRangeException()
-        };
-        return (network, defaultWalletId, defaultWalletCurrency);
-    }
 
     public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
@@ -573,94 +303,9 @@ query GetNetworkAndDefaultWallet {
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Pay(bolt11: {bolt11}, payParams: {payParams})", bolt11, payParams);
-        var request = new GraphQLRequest
-        {
-            Query = @"
-mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
-  lnInvoicePaymentSend(input: $input) {
-    transaction {
-      createdAt
-          direction
-          id
-          initiationVia {
-            ... on InitiationViaLn {
-              paymentHash
-              paymentRequest
-            }
-          }
-          memo
-          settlementAmount
-          settlementCurrency
-          settlementVia {
-            ... on SettlementViaLn {
-              preImage
-            }
-            ... on SettlementViaIntraLedger {
-              preImage
-            }
-          }
-          status
+        throw new NotImplementedException();
     }
-    errors {
-      message
-    }
-    status
-  }
-}",
-            OperationName = "LnInvoicePaymentSend",
-            Variables = new {
-                input = new {
-                //    walletId = WalletId,
-                    paymentRequest = bolt11,
-                }
-            }
-        };
-        var bolt11Parsed = BOLT11PaymentRequest.Parse(bolt11, _network);
-       
-        CancellationTokenSource cts = CancellationTokenSource.CreateLinkedTokenSource(cancellation,
-            new CancellationTokenSource(payParams?.SendTimeout ?? PayInvoiceParams.DefaultSendTimeout).Token);
-        var response =(JObject) (await  _client.SendQueryAsync<dynamic>(request,  cts.Token)).Data.lnInvoicePaymentSend;
-        
-        var result = new PayResponse();
-        result.Result = response["status"].Value<string>() switch
-        {
-            "ALREADY_PAID" => PayResult.Ok,
-            "FAILURE" => PayResult.Error,
-            "PENDING"=> PayResult.Unknown,
-            "SUCCESS" => PayResult.Ok,
-            null => PayResult.Unknown,
-            _ => throw new ArgumentOutOfRangeException()
-        };
-        if (result.Result == PayResult.Error && response.TryGetValue("errors", out var error))
-        {
-            if (error.ToString().Contains("ResourceAttemptsRedlockServiceError", StringComparison.InvariantCultureIgnoreCase))
-            {
-                await Task.Delay(Random.Shared.Next(200, 600), cts.Token);
-                return await Pay(bolt11, payParams, cts.Token);
-            }
-            if (error is JArray { Count: > 0 } arr)
-                result.ErrorDetail = arr[0]["message"]?.Value<string>();
-        }
-        if (response["transaction"]?.Value<JObject>() is not null)
-        {
-            result.Details = new PayDetails()
-            {
-                PaymentHash = bolt11Parsed.PaymentHash ?? new uint256(response["transaction"]["initiationVia"]["paymentHash"].Value<string>()),
-                Status = response["status"].Value<string>() switch
-                {
-                    "ALREADY_PAID"  => LightningPaymentStatus.Complete,
-                    "FAILURE" => LightningPaymentStatus.Failed,
-                    "PENDING" => LightningPaymentStatus.Pending,
-                    "SUCCESS" => LightningPaymentStatus.Complete,
-                    null => LightningPaymentStatus.Unknown,
-                    _ => throw new ArgumentOutOfRangeException()
-                },
-                Preimage = response["transaction"]["settlementVia"]?["preImage"].Value<string>() is null? null: new uint256(response["transaction"]["settlementVia"]["preImage"].Value<string>()),
-            };
-        }
-
-        return result;
-    }
+    
 
     public async Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = new CancellationToken())
     {
