@@ -85,7 +85,7 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<LightningInvoice?> GetInvoice(string invoiceId,
         CancellationToken cancellation = new CancellationToken())
     {
-        
+        Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
         var reques = new GraphQLRequest
         {
             Query = @"
@@ -141,17 +141,20 @@ query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
     public async Task<LightningInvoice?> GetInvoice(uint256 paymentHash,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("GetInvoice(paymentHash: {paymentHash})", paymentHash);
         return await GetInvoice(paymentHash.ToString(), cancellation);
     }
 
     public async Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("ListInvoices()");
         return await ListInvoices(new ListInvoicesParams(), cancellation);
     }
 
     public async Task<LightningInvoice[]> ListInvoices(ListInvoicesParams request,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("ListInvoices(request: {request})", request);
         var reques = new GraphQLRequest
         {
             Query = @"
@@ -192,6 +195,7 @@ query Invoices($walletId: WalletId!) {
     public async Task<LightningPayment?> GetPayment(string paymentHash,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("GetPayment(paymentHash: {paymentHash})", paymentHash);
         var reques = new GraphQLRequest
         {
             Query = @"
@@ -271,13 +275,14 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
 
     public async Task<LightningPayment[]> ListPayments(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("ListPayments()");
         return await ListPayments(new ListPaymentsParams(), cancellation);
     }
 
     public async Task<LightningPayment[]> ListPayments(ListPaymentsParams request,
         CancellationToken cancellation = new CancellationToken())
     {
-        
+        Logger.LogInformation("ListPayments(request: {request})", request);
         var reques = new GraphQLRequest
         {
             Query = @"
@@ -333,12 +338,15 @@ query Transactions($walletId: WalletId!) {
     public async Task<LightningInvoice> CreateInvoice(LightMoney amount, string description, TimeSpan expiry,
         CancellationToken cancellation = new())
     {
+        Logger.LogInformation("CreateInvoice(amount: {amount}, description: {description}, expiry: {expiry})", 
+            amount, description, expiry);
         return await CreateInvoice(new CreateInvoiceParams(amount, description, expiry), cancellation);
     }
 
     public async Task<LightningInvoice> CreateInvoice(CreateInvoiceParams createInvoiceRequest,
         CancellationToken cancellation = new())
     {
+        Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         string query;
         
         query = WalletCurrency?.Equals("btc", StringComparison.InvariantCultureIgnoreCase) is not true ? @"
@@ -411,6 +419,7 @@ expiresIn = (int)createInvoiceRequest.Expiry.TotalMinutes
 
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("Listen()");
         return new BlinkListener(_client, this, Logger);
     }
 
@@ -508,7 +517,7 @@ expiresIn = (int)createInvoiceRequest.Expiry.TotalMinutes
     }
     public async Task<(Network Network, string DefaultWalletId, string DefaultWalletCurrency)> GetNetworkAndDefaultWallet(CancellationToken cancellation =default)
     {
-               
+        Logger.LogInformation("GetNetworkAndDefaultWallet()");
         var reques = new GraphQLRequest
         {
             Query = @"
@@ -545,6 +554,7 @@ query GetNetworkAndDefaultWallet {
 
     public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("GetInfo");
 
         throw new NotSupportedException();
     }
@@ -556,13 +566,14 @@ query GetNetworkAndDefaultWallet {
     public async Task<PayResponse> Pay(PayInvoiceParams payParams,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("Pay(payParams: {payParams})", payParams);
         return await Pay(null, new PayInvoiceParams(), cancellation);
     }
 
     public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams,
         CancellationToken cancellation = new CancellationToken())
     {
-        
+        Logger.LogInformation("Pay(bolt11: {bolt11}, payParams: {payParams})", bolt11, payParams);
         var request = new GraphQLRequest
         {
             Query = @"
@@ -654,34 +665,40 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
 
     public async Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("Pay(bolt11: {bolt11})", bolt11);
         return await Pay(bolt11, new PayInvoiceParams(), cancellation);
     }
 
 
     public async Task CancelInvoice(string invoiceId, CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("CancelInvoice(invoiceId: {invoiceId})", invoiceId);
         throw new NotImplementedException();
     }
 
     public async Task<BitcoinAddress> GetDepositAddress(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("GetDepositAddress()");
         throw new NotImplementedException();
     }
 
     public async Task<OpenChannelResponse> OpenChannel(OpenChannelRequest openChannelRequest,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("OpenChannel(request: {request})", openChannelRequest);
         throw new NotImplementedException();
     }
 
     public async Task<ConnectionResult> ConnectTo(NodeInfo nodeInfo,
         CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("ConnectTo(nodeInfo: {nodeInfo})", nodeInfo);
         throw new NotImplementedException();
     }
 
     public async Task<LightningChannel[]> ListChannels(CancellationToken cancellation = new CancellationToken())
     {
+        Logger.LogInformation("ListChannels()");
         throw new NotImplementedException();
     }
 
