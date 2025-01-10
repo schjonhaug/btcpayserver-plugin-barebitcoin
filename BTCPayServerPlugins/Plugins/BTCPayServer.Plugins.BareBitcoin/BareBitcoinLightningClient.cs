@@ -39,10 +39,6 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly Network _network;
     public ILogger Logger;
 
-    public class BlinkConnectionInit
-    {
-        [JsonProperty("X-API-KEY")] public string ApiKey { get; set; }
-    }
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
     {
       
