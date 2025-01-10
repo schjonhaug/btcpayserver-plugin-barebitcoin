@@ -92,7 +92,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             }
             catch (Exception e)
             {
-                error = "GetBalance failed";
+                _loggerFactory.CreateLogger(nameof(BareBitcoinLightningConnectionStringHandler)).LogError(e, "Failed to parse BareBitcoin connection string");
                 return null;
             }
       

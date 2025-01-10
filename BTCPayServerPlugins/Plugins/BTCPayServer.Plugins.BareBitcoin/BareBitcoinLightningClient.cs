@@ -43,6 +43,12 @@ public class BareBitcoinLightningClient : ILightningClient
     private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
     private static long _lastNonce;
 
+    // Balance caching
+    private static readonly SemaphoreSlim _balanceLock = new SemaphoreSlim(1, 1);
+    private LightningNodeBalance? _cachedBalance;
+    private DateTime _lastBalanceCheck = DateTime.MinValue;
+    private static readonly TimeSpan _cacheTimeout = TimeSpan.FromSeconds(5);
+
     private async Task<long> GetNextNonce()
     {
         await _nonceLock.WaitAsync();
@@ -183,7 +189,7 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListPayments(request: {request})", request);
-        throw new NotImplementedException();
+        return await Task.FromException<LightningPayment[]>(new NotImplementedException());
     }
 
     public async Task<LightningInvoice> CreateInvoice(LightMoney amount, string description, TimeSpan expiry,
@@ -211,16 +217,15 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         private readonly BareBitcoinLightningClient _lightningClient;
         private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
-        private readonly IDisposable _subscription;
-        private readonly IDisposable _wsSubscriptionDisposable;
+        private readonly IDisposable? _subscription;
+        private readonly IDisposable? _wsSubscriptionDisposable;
         private readonly TaskCompletionSource streamEnded = new();
 
         public BlinkListener(GraphQLHttpClient httpClient, BareBitcoinLightningClient lightningClient, ILogger logger)
         {
+            _lightningClient = lightningClient;
             try
             {
-
-                _lightningClient = lightningClient;
                 var stream = httpClient.CreateSubscriptionStream<JObject>(new GraphQLRequest()
                 {
                     Query = @"subscription myUpdates {
@@ -263,8 +268,8 @@ public class BareBitcoinLightningClient : ILightningClient
                     {
                         logger.LogError(e, "Error while processing detecting lightning invoice payment");
                     }
-                   
                 });
+
                 _wsSubscriptionDisposable = httpClient.WebsocketConnectionState.Subscribe(state =>
                 {
                     if (state == GraphQLWebsocketConnectionState.Disconnected)
@@ -272,18 +277,21 @@ public class BareBitcoinLightningClient : ILightningClient
                         streamEnded.TrySetResult();
                     }
                 });
-                
             }
             catch (Exception e)
             {
                 logger.LogError(e, "Error while creating lightning invoice listener");
+                _subscription?.Dispose();
+                _wsSubscriptionDisposable?.Dispose();
+                streamEnded.TrySetResult();
             }
         }
+
         public void Dispose()
         {
-            _subscription.Dispose();
+            _subscription?.Dispose();
             _invoices.Writer.TryComplete();
-            _wsSubscriptionDisposable.Dispose();
+            _wsSubscriptionDisposable?.Dispose();
             streamEnded.TrySetResult();
         }
 
@@ -366,42 +374,60 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         try 
         {
-            Logger.LogInformation("Getting balance from BareBitcoin");
-            var response = await MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
-            Logger.LogInformation("Received balance response: {response}", response);
-            
-            // Parse response according to OpenAPI spec
-            var accounts = JObject.Parse(response)["accounts"] as JArray;
-            if (accounts == null || !accounts.Any())
+            await _balanceLock.WaitAsync(cancellation);
+            try
             {
-                Logger.LogWarning("No bitcoin accounts found in response");
-                return new LightningNodeBalance();
-            }
-
-            // If we have an accountId, find that specific account
-            var account = _accountId != null 
-                ? accounts.FirstOrDefault(a => a["id"]?.ToString() == _accountId)
-                : accounts.First();
-
-            if (account == null)
-            {
-                Logger.LogWarning("Account {AccountId} not found in response", _accountId);
-                return new LightningNodeBalance();
-            }
-
-            // Get availableBtc and convert to satoshis (1 BTC = 100,000,000 sats)
-            var availableBtc = account["availableBtc"]?.Value<double>() ?? 0;
-            var satoshis = (long)(availableBtc * 100_000_000);
-
-            Logger.LogInformation("Creating LightningNodeBalance response with {AvailableBtc} BTC ({Satoshis} sats)", availableBtc, satoshis);
-            
-            return new LightningNodeBalance()
-            {
-                OffchainBalance = new OffchainBalance()
+                var now = DateTime.UtcNow;
+                if (_cachedBalance != null && (now - _lastBalanceCheck) < _cacheTimeout)
                 {
-                    Local = LightMoney.Satoshis(satoshis)
+                    Logger.LogInformation("Returning cached balance from {LastCheck}", _lastBalanceCheck);
+                    return _cachedBalance;
                 }
-            };
+
+                Logger.LogInformation("Getting balance from BareBitcoin");
+                var response = await MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
+                Logger.LogInformation("Received balance response: {response}", response);
+                
+                // Parse response according to OpenAPI spec
+                var accounts = JObject.Parse(response)["accounts"] as JArray;
+                if (accounts == null || !accounts.Any())
+                {
+                    Logger.LogWarning("No bitcoin accounts found in response");
+                    return new LightningNodeBalance();
+                }
+
+                // If we have an accountId, find that specific account
+                var account = _accountId != null 
+                    ? accounts.FirstOrDefault(a => a["id"]?.ToString() == _accountId)
+                    : accounts.First();
+
+                if (account == null)
+                {
+                    Logger.LogWarning("Account {AccountId} not found in response", _accountId);
+                    return new LightningNodeBalance();
+                }
+
+                // Get availableBtc and convert to satoshis (1 BTC = 100,000,000 sats)
+                var availableBtc = account["availableBtc"]?.Value<double>() ?? 0;
+                var satoshis = (long)(availableBtc * 100_000_000);
+
+                Logger.LogInformation("Creating LightningNodeBalance response with {AvailableBtc} BTC ({Satoshis} sats)", availableBtc, satoshis);
+                
+                _cachedBalance = new LightningNodeBalance()
+                {
+                    OffchainBalance = new OffchainBalance()
+                    {
+                        Local = LightMoney.Satoshis(satoshis)
+                    }
+                };
+                _lastBalanceCheck = now;
+                
+                return _cachedBalance;
+            }
+            finally
+            {
+                _balanceLock.Release();
+            }
         }
         catch (Exception ex)
         {
