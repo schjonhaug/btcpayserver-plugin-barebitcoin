@@ -39,6 +39,25 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly Network _network;
     public ILogger Logger;
 
+    // Static nonce tracking with async-compatible lock
+    private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
+    private static long _lastNonce;
+
+    private async Task<long> GetNextNonce()
+    {
+        await _nonceLock.WaitAsync();
+        try
+        {
+            var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            _lastNonce = Math.Max(_lastNonce + 1, currentTimestamp);
+            return _lastNonce;
+        }
+        finally
+        {
+            _nonceLock.Release();
+        }
+    }
+
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
     {
       
@@ -395,8 +414,10 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         try 
         {
+            // Convert millisecond nonce to string
+            var nonceStr = nonce.ToString();
             // Encode data: nonce and raw data
-            var encodedData = data != null ? $"{nonce}{data}" : nonce.ToString();
+            var encodedData = data != null ? $"{nonceStr}{data}" : nonceStr;
             Logger.LogInformation("Creating HMAC with encodedData: {encodedData}", encodedData);
 
             // SHA-256 hash of the encoded data
@@ -435,7 +456,7 @@ public class BareBitcoinLightningClient : ILightningClient
         try 
         {
             using var httpClient = new HttpClient();
-            var nonce = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+            var nonce = await GetNextNonce();
             Logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
             
             if (data != null)
