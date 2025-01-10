@@ -56,37 +56,38 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public override string ToString()
     {
-      return "WHERE IS THIS USED?";
-        //return $"type=blink;server={_apiEndpoint};api-key={_apiKey}{(WalletId is null? "":$";wallet-id={WalletId}")}";
+        return $"type=barebitcoin;server={_apiEndpoint};public-key={_publicKey};account-id={_accountId}";
     }
 
     public async Task<LightningInvoice?> GetInvoice(string invoiceId,
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
-
-
-        throw new NotImplementedException();
-        
-         }
+        return await Task.FromException<LightningInvoice?>(new NotImplementedException());
+    }
 
     public LightningInvoice? ToInvoice(JObject invoice)
     {
-        var bolt11 = BOLT11PaymentRequest.Parse(invoice["paymentRequest"].Value<string>(), _network);
+        var paymentRequestToken = invoice["paymentRequest"];
+        if (paymentRequestToken?.Value<string>() is not string paymentRequest)
+            return null;
+            
+        var bolt11 = BOLT11PaymentRequest.Parse(paymentRequest, _network);
         return new LightningInvoice()
         {
-            Id = invoice["paymentHash"].Value<string>(),
-            Amount = invoice["satoshis"] is null? bolt11.MinimumAmount:  LightMoney.Satoshis(invoice["satoshis"].Value<long>()),
-                Preimage =  invoice["paymentSecret"].Value<string>(),
-            PaidAt = (invoice["paymentStatus"].Value<string>()) ==  "PAID"? DateTimeOffset.UtcNow : null,
-            Status =  (invoice["paymentStatus"].Value<string>()) switch
+            Id = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
+            Amount = invoice["satoshis"] is null ? bolt11.MinimumAmount : LightMoney.Satoshis(invoice["satoshis"]!.Value<long>()),
+            Preimage = invoice["paymentSecret"]?.Value<string>(),
+            PaidAt = (invoice["paymentStatus"]?.Value<string>()) == "PAID" ? DateTimeOffset.UtcNow : null,
+            Status = (invoice["paymentStatus"]?.Value<string>()) switch
             {
                 "EXPIRED" => LightningInvoiceStatus.Expired,
                 "PAID" => LightningInvoiceStatus.Paid,
-                "PENDING" => LightningInvoiceStatus.Unpaid
+                "PENDING" => LightningInvoiceStatus.Unpaid,
+                _ => LightningInvoiceStatus.Unpaid // Default case
             },
-            BOLT11 =  invoice["paymentRequest"].Value<string>(),
-            PaymentHash = invoice["paymentHash"].Value<string>(),
+            BOLT11 = paymentRequest,
+            PaymentHash = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
             ExpiresAt = bolt11.ExpiryDate
         };
     }
@@ -108,7 +109,7 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListInvoices(request: {request})", request);
-        throw new NotImplementedException();
+        return await Task.FromException<LightningInvoice[]>(new NotImplementedException());
     }
     
 
@@ -116,37 +117,40 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetPayment(paymentHash: {paymentHash})", paymentHash);
-        throw new NotImplementedException();
+        return await Task.FromException<LightningPayment?>(new NotImplementedException());
     }
 
     public LightningPayment? ToLightningPayment(JObject transaction)
     {
-        if ((string)transaction["direction"] == "RECEIVE")
+        if ((transaction["direction"]?.Value<string>() ?? "") == "RECEIVE")
             return null;
 
         var initiationVia = transaction["initiationVia"];
-        if (initiationVia?["paymentHash"] == null)
+        if (initiationVia?["paymentHash"] == null || initiationVia["paymentRequest"] == null)
             return null;
 
-        var bolt11 = BOLT11PaymentRequest.Parse((string)initiationVia["paymentRequest"], _network);
+        var paymentRequest = initiationVia["paymentRequest"]!.Value<string>();
+        if (paymentRequest == null)
+            return null;
+            
+        var bolt11 = BOLT11PaymentRequest.Parse(paymentRequest, _network);
         var preimage = transaction["settlementVia"]?["preImage"]?.Value<string>();
         return new LightningPayment()
         {
             Amount = bolt11.MinimumAmount,
-            Status = transaction["status"].ToString() switch
+            Status = (transaction["status"]?.Value<string>() ?? "") switch
             {
                 "FAILURE" => LightningPaymentStatus.Failed,
                 "PENDING" => LightningPaymentStatus.Pending,
                 "SUCCESS" => LightningPaymentStatus.Complete,
                 _ => LightningPaymentStatus.Unknown
             },
-            BOLT11 = (string)initiationVia["paymentRequest"],
-            Id = (string)initiationVia["paymentHash"],
-            PaymentHash = (string)initiationVia["paymentHash"],
-            CreatedAt = DateTimeOffset.FromUnixTimeSeconds(transaction["createdAt"].Value<long>()),
+            BOLT11 = paymentRequest,
+            Id = initiationVia["paymentHash"]!.Value<string>() ?? string.Empty,
+            PaymentHash = initiationVia["paymentHash"]!.Value<string>() ?? string.Empty,
+            CreatedAt = DateTimeOffset.FromUnixTimeSeconds(transaction["createdAt"]!.Value<long>()),
             AmountSent = bolt11.MinimumAmount,
-            Preimage =  preimage
-
+            Preimage = preimage
         };
     }
 
@@ -175,13 +179,13 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new())
     {
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
-        throw new NotImplementedException();
+        return await Task.FromException<LightningInvoice>(new NotImplementedException());
     }
 
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
-        throw new NotImplementedException();
+        return await Task.FromException<ILightningInvoiceListener>(new NotImplementedException());
     }
 
     public class BlinkListener : ILightningInvoiceListener
@@ -189,6 +193,8 @@ public class BareBitcoinLightningClient : ILightningClient
         private readonly BareBitcoinLightningClient _lightningClient;
         private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
         private readonly IDisposable _subscription;
+        private readonly IDisposable _wsSubscriptionDisposable;
+        private readonly TaskCompletionSource streamEnded = new();
 
         public BlinkListener(GraphQLHttpClient httpClient, BareBitcoinLightningClient lightningClient, ILogger logger)
         {
@@ -262,9 +268,6 @@ public class BareBitcoinLightningClient : ILightningClient
             streamEnded.TrySetResult();
         }
 
-        private TaskCompletionSource streamEnded = new();
-        private readonly IDisposable _wsSubscriptionDisposable;
-
         public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
         {
             var resultz = await Task.WhenAny(streamEnded.Task, _invoices.Reader.ReadAsync(cancellation).AsTask());
@@ -277,69 +280,64 @@ public class BareBitcoinLightningClient : ILightningClient
         }
     }
 
-    public Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
+    public async Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInfo");
-
-        throw new NotSupportedException();
+        return await Task.FromException<LightningNodeInformation>(new NotSupportedException());
     }
 
 
 
     
 
-    public async Task<PayResponse> Pay(PayInvoiceParams payParams,
-        CancellationToken cancellation = new CancellationToken())
+    public async Task<PayResponse> Pay(PayInvoiceParams payParams, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Pay(payParams: {payParams})", payParams);
-        return await Pay(null, new PayInvoiceParams(), cancellation);
+        return await Task.FromException<PayResponse>(new NotImplementedException());
     }
 
-    public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams,
-        CancellationToken cancellation = new CancellationToken())
+    public async Task<PayResponse> Pay(string bolt11, PayInvoiceParams payParams, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Pay(bolt11: {bolt11}, payParams: {payParams})", bolt11, payParams);
-        throw new NotImplementedException();
+        return await Task.FromException<PayResponse>(new NotImplementedException());
     }
     
 
     public async Task<PayResponse> Pay(string bolt11, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Pay(bolt11: {bolt11})", bolt11);
-        return await Pay(bolt11, new PayInvoiceParams(), cancellation);
+        return await Task.FromException<PayResponse>(new NotImplementedException());
     }
 
 
     public async Task CancelInvoice(string invoiceId, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("CancelInvoice(invoiceId: {invoiceId})", invoiceId);
-        throw new NotImplementedException();
+        await Task.FromException(new NotImplementedException());
     }
 
     public async Task<BitcoinAddress> GetDepositAddress(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetDepositAddress()");
-        throw new NotImplementedException();
+        return await Task.FromException<BitcoinAddress>(new NotImplementedException());
     }
 
-    public async Task<OpenChannelResponse> OpenChannel(OpenChannelRequest openChannelRequest,
-        CancellationToken cancellation = new CancellationToken())
+    public async Task<OpenChannelResponse> OpenChannel(OpenChannelRequest openChannelRequest, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("OpenChannel(request: {request})", openChannelRequest);
-        throw new NotImplementedException();
+        return await Task.FromException<OpenChannelResponse>(new NotImplementedException());
     }
 
-    public async Task<ConnectionResult> ConnectTo(NodeInfo nodeInfo,
-        CancellationToken cancellation = new CancellationToken())
+    public async Task<ConnectionResult> ConnectTo(NodeInfo nodeInfo, CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ConnectTo(nodeInfo: {nodeInfo})", nodeInfo);
-        throw new NotImplementedException();
+        return await Task.FromException<ConnectionResult>(new NotImplementedException());
     }
 
     public async Task<LightningChannel[]> ListChannels(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListChannels()");
-        throw new NotImplementedException();
+        return await Task.FromException<LightningChannel[]>(new NotImplementedException());
     }
 
 
