@@ -81,9 +81,9 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         client.BaseAddress = uri;
 
-        var walletId = "default"; //TODO: Delete
+        
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, walletId, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}:{walletId}"));
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"));
       
 
         try

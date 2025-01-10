@@ -31,7 +31,6 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly string _publicKey;
     private readonly string _accountId; 
     private readonly Uri _apiEndpoint;
-    public  string? WalletId { get; set; } // TODO: Delete
     private readonly string _apiKey; // TODO Delete
    
 
@@ -45,7 +44,7 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         [JsonProperty("X-API-KEY")] public string ApiKey { get; set; }
     }
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, string walletId, Network network, HttpClient httpClient, ILogger logger)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
     {
         _apiKey = "TODO-DELETE";
         var apiKey = "TODO-DELETE";
@@ -54,7 +53,6 @@ public class BareBitcoinLightningClient : ILightningClient
         _accountId = accountId;
 
         _apiEndpoint = apiEndpoint;
-        WalletId = walletId;
         _network = network;
         Logger = logger;
         _client = new GraphQLHttpClient(new GraphQLHttpClientOptions() {EndPoint = _apiEndpoint,
@@ -79,7 +77,8 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public override string ToString()
     {
-        return $"type=blink;server={_apiEndpoint};api-key={_apiKey}{(WalletId is null? "":$";wallet-id={WalletId}")}";
+      return "WHERE IS THIS USED?";
+        //return $"type=blink;server={_apiEndpoint};api-key={_apiKey}{(WalletId is null? "":$";wallet-id={WalletId}")}";
     }
 
     public async Task<LightningInvoice?> GetInvoice(string invoiceId,
@@ -107,7 +106,7 @@ query InvoiceByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!) {
             OperationName = "InvoiceByPaymentHash",
             Variables = new
             {
-                walletId = WalletId,
+               // walletId = WalletId,
                 paymentHash = invoiceId
             }
         };
@@ -183,7 +182,7 @@ query Invoices($walletId: WalletId!) {
             OperationName = "Invoices",
             Variables = new
             {
-                walletId = WalletId
+             //   walletId = WalletId
             }
         };
         var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
@@ -233,7 +232,7 @@ query TransactionsByPaymentHash($paymentHash: PaymentHash!, $walletId: WalletId!
             OperationName = "TransactionsByPaymentHash",
             Variables = new
             {
-                walletId = WalletId,
+             //   walletId = WalletId,
                 paymentHash = paymentHash
             }
         };
@@ -324,7 +323,7 @@ query Transactions($walletId: WalletId!) {
             OperationName = "Transactions",
             Variables = new
             {
-                walletId = WalletId
+             //   walletId = WalletId
             }
         };
         var response = await _client.SendQueryAsync<dynamic>(reques,  cancellation);
@@ -389,7 +388,7 @@ mutation lnInvoiceCreate($input: LnInvoiceCreateOnBehalfOfRecipientInput!) {
             {
                 input = new
                 {
-                    recipientWalletId = WalletId,
+                 //   recipientWalletId = WalletId,
                     memo = createInvoiceRequest.Description,
                     descriptionHash = createInvoiceRequest.DescriptionHash?.ToString(),
                     amount = (long)createInvoiceRequest.Amount.ToUnit(LightMoneyUnit.Satoshi),
@@ -611,7 +610,7 @@ mutation LnInvoicePaymentSend($input: LnInvoicePaymentInput!) {
             OperationName = "LnInvoicePaymentSend",
             Variables = new {
                 input = new {
-                    walletId = WalletId,
+                //    walletId = WalletId,
                     paymentRequest = bolt11,
                 }
             }
