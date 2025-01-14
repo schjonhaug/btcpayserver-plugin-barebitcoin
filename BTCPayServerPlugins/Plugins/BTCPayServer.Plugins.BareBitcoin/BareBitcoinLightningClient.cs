@@ -170,7 +170,49 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListInvoices(request: {request})", request);
-        return await Task.FromException<LightningInvoice[]>(new NotImplementedException());
+        try
+        {
+            // Use the ledger endpoint to get all transactions
+            var response = await MakeAuthenticatedRequest(
+                "GET",
+                _accountId != null ? $"/v1/ledger/{_accountId}" : "/v1/ledger"
+            );
+
+            var responseObj = JObject.Parse(response);
+            var entries = responseObj["entries"] as JArray;
+
+            if (entries == null)
+                return Array.Empty<LightningInvoice>();
+
+            var invoices = new List<LightningInvoice>();
+
+            // Filter for deposit entries and get their details
+            foreach (var entry in entries)
+            {
+                if (entry["type"]?.Value<string>() != "ENTRY_TYPE_DEPOSIT" || 
+                    entry["currency"]?.Value<string>() != "CURRENCY_BTC")
+                    continue;
+
+                var transactionId = entry["transactionId"]?.Value<string>();
+                if (string.IsNullOrEmpty(transactionId))
+                    continue;
+
+                // Get the invoice details
+                var invoice = await GetInvoice(transactionId, cancellation);
+                var isPendingOnly = request.PendingOnly.GetValueOrDefault(false);
+                if (invoice != null && (!isPendingOnly || invoice.Status == LightningInvoiceStatus.Unpaid))
+                {
+                    invoices.Add(invoice);
+                }
+            }
+
+            return invoices.ToArray();
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error listing invoices from BareBitcoin");
+            throw;
+        }
     }
     
 
@@ -287,7 +329,9 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
-        return new BareBitcoinListener(this, Logger);
+        var listener = new BareBitcoinListener(this, Logger);
+        await Task.CompletedTask; // Add await to satisfy compiler
+        return listener;
     }
 
     public class BareBitcoinListener : ILightningInvoiceListener
@@ -324,7 +368,7 @@ public class BareBitcoinLightningClient : ILightningClient
 
                         // Get fresh status
                         var currentInvoice = await _lightningClient.GetInvoice(invoice.Id, _cts.Token);
-                        if (currentInvoice?.Status == LightningInvoiceStatus.Paid)
+                        if (currentInvoice != null && currentInvoice.Status == LightningInvoiceStatus.Paid)
                         {
                             _logger.LogInformation("Invoice {InvoiceId} has been paid", invoice.Id);
                             _processedInvoices.Add(invoice.Id);
@@ -351,6 +395,14 @@ public class BareBitcoinLightningClient : ILightningClient
         public void Dispose()
         {
             _cts.Cancel();
+            try
+            {
+                _pollingTask.Wait(TimeSpan.FromSeconds(5));
+            }
+            catch
+            {
+                // Ignore any errors during disposal
+            }
             _cts.Dispose();
             _invoices.Writer.TryComplete();
         }
