@@ -31,6 +31,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly string _publicKey;
     private readonly string _accountId; 
     private readonly Uri _apiEndpoint;
+    private readonly HttpClient _httpClient;
 
    
 
@@ -73,6 +74,7 @@ public class BareBitcoinLightningClient : ILightningClient
 
         _apiEndpoint = apiEndpoint;
         _network = network;
+        _httpClient = httpClient;
         Logger = logger;
         
         
@@ -494,11 +496,11 @@ public class BareBitcoinLightningClient : ILightningClient
                 var now = DateTime.UtcNow;
                 if (_cachedBalance != null && (now - _lastBalanceCheck) < _cacheTimeout)
                 {
-                    Logger.LogInformation("Returning cached balance from {LastCheck}", _lastBalanceCheck);
+                    Logger.LogInformation("Using cached balance from {LastCheck}", _lastBalanceCheck);
                     return _cachedBalance;
                 }
 
-                Logger.LogInformation("Getting balance from BareBitcoin");
+                Logger.LogInformation("Getting balance from BareBitcoin (cache expired or not set)");
                 var response = await MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
                 Logger.LogInformation("Received balance response: {response}", response);
                 
@@ -588,7 +590,6 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         try 
         {
-            using var httpClient = new HttpClient();
             var nonce = await GetNextNonce();
             Logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
 
@@ -605,7 +606,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 request.Content = new StringContent(data, System.Text.Encoding.UTF8, "application/json");
             }
 
-            var response = await httpClient.SendAsync(request);
+            var response = await _httpClient.SendAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             
             if (!response.IsSuccessStatusCode)
