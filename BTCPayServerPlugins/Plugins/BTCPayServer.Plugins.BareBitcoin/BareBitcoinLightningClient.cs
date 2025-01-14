@@ -175,39 +175,65 @@ public class BareBitcoinLightningClient : ILightningClient
         try
         {
             // Use the ledger endpoint to get all transactions
-            var response = await MakeAuthenticatedRequest(
-                "GET",
-                _accountId != null ? $"/v1/ledger/{_accountId}" : "/v1/ledger"
-            );
+            var path = _accountId != null ? $"/v1/ledger/{_accountId}" : "/v1/ledger";
+            Logger.LogInformation("Fetching ledger entries from {path}", path);
+            
+            var response = await MakeAuthenticatedRequest("GET", path);
+            Logger.LogInformation("Received ledger response: {response}", response);
 
             var responseObj = JObject.Parse(response);
             var entries = responseObj["entries"] as JArray;
 
             if (entries == null)
+            {
+                Logger.LogWarning("No entries found in ledger response");
                 return Array.Empty<LightningInvoice>();
+            }
 
+            Logger.LogInformation("Found {count} total ledger entries", entries.Count);
             var invoices = new List<LightningInvoice>();
 
             // Filter for deposit entries and get their details
             foreach (var entry in entries)
             {
-                if (entry["type"]?.Value<string>() != "ENTRY_TYPE_DEPOSIT" || 
-                    entry["currency"]?.Value<string>() != "CURRENCY_BTC")
+                var type = entry["type"]?.Value<string>();
+                var currency = entry["currency"]?.Value<string>();
+                Logger.LogDebug("Processing ledger entry - Type: {type}, Currency: {currency}", type, currency);
+
+                if (type != "ENTRY_TYPE_DEPOSIT" || currency != "CURRENCY_BTC")
+                {
+                    Logger.LogDebug("Skipping entry - not a BTC deposit");
                     continue;
+                }
 
                 var transactionId = entry["transactionId"]?.Value<string>();
                 if (string.IsNullOrEmpty(transactionId))
+                {
+                    Logger.LogWarning("Skipping entry - missing transactionId");
                     continue;
+                }
 
+                Logger.LogDebug("Fetching invoice details for transaction {transactionId}", transactionId);
                 // Get the invoice details
                 var invoice = await GetInvoice(transactionId, cancellation);
                 var isPendingOnly = request.PendingOnly.GetValueOrDefault(false);
-                if (invoice != null && (!isPendingOnly || invoice.Status == LightningInvoiceStatus.Unpaid))
+                
+                if (invoice != null)
                 {
-                    invoices.Add(invoice);
+                    Logger.LogDebug("Found invoice with status {status}", invoice.Status);
+                    if (!isPendingOnly || invoice.Status == LightningInvoiceStatus.Unpaid)
+                    {
+                        invoices.Add(invoice);
+                        Logger.LogDebug("Added invoice to results");
+                    }
+                }
+                else
+                {
+                    Logger.LogWarning("No invoice found for transaction {transactionId}", transactionId);
                 }
             }
 
+            Logger.LogInformation("Returning {count} invoices", invoices.Count);
             return invoices.ToArray();
         }
         catch (Exception ex)
