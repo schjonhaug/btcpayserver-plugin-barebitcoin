@@ -16,14 +16,111 @@
     }
   ],
   "paths": {
+    "/v1/deposit-destinations/bitcoin": {
+      "get": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Fetch bitcoin deposit destinations",
+        "description": "Fetches bitcoin deposit destinations. These destinations are always valid,\n and can be used for receiving arbitrary amounts. Onchain addresses are refreshed\n every time a deposit is made, but all prior generated addresses are still valid.",
+        "operationId": "BitcoinTransferService_DepositDestinations",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "description": "If empty, the default account is used.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositDestinationsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/deposit-destinations/bitcoin/invoice": {
+      "post": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Create a new Lightning invoice",
+        "description": "Creates a new BOLT11 Lightning invoice. Lightning invoices are requests to receive a specific\n amount of bitcoin within a set amount of time. If you don't a specific amount, consider\n using the destinations returned from /v1/deposit-destinations/bitcoin.",
+        "operationId": "BitcoinTransferService_NewLightningInvoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLightningInvoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewLightningInvoiceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/deposit-destinations/bitcoin/invoice/{id}": {
+      "get": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Fetch a Lightning invoice",
+        "description": "Fetches a Lightning invoice.",
+        "operationId": "BitcoinTransferService_GetLightningInvoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Can be:\n 1. Deposit destination ID. Prefix: `ded_`.\n 2. The Lightning invoice itself.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetLightningInvoiceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/v1/ledger": {
       "get": {
         "tags": [
-          "TransactionService"
+          "LedgerService"
         ],
         "summary": "Fetch ledger",
         "description": "Fetches the ledger for the entire user. The ledger includes all transactions\n that affect the balance of the account.",
-        "operationId": "TransactionService_LedgerUser",
+        "operationId": "LedgerService_LedgerUser",
         "responses": {
           "200": {
             "description": "OK",
@@ -41,11 +138,11 @@
     "/v1/ledger/{accountId}": {
       "get": {
         "tags": [
-          "TransactionService"
+          "LedgerService"
         ],
         "summary": "Fetch sub account ledger",
         "description": "Fetches the ledger for a specific account. The ledger includes all\n transactions that affect the balance of the account.",
-        "operationId": "TransactionService_LedgerAccount",
+        "operationId": "LedgerService_LedgerAccount",
         "parameters": [
           {
             "name": "accountId",
@@ -74,11 +171,11 @@
     "/v1/orders": {
       "get": {
         "tags": [
-          "TransactionService"
+          "TradingService"
         ],
         "summary": "Fetch open orders",
         "description": "Fetches all open orders for the user. Open orders are orders that are\n not yet filled, and can be cancelled.",
-        "operationId": "TransactionService_OpenOrders",
+        "operationId": "TradingService_OpenOrders",
         "responses": {
           "200": {
             "description": "OK",
@@ -94,11 +191,11 @@
       },
       "post": {
         "tags": [
-          "TransactionService"
+          "TradingService"
         ],
         "summary": "Place a new order",
         "description": "Places a new order. If the endpoint returns with a 200 status, the order\n is successfully placed. If you're creating a market order, a trade is\n also created, and its ID is included in the response.",
-        "operationId": "TransactionService_NewOrder",
+        "operationId": "TradingService_NewOrder",
         "requestBody": {
           "content": {
             "application/json": {
@@ -126,11 +223,11 @@
     "/v1/orders/{orderId}": {
       "delete": {
         "tags": [
-          "TransactionService"
+          "TradingService"
         ],
         "summary": "Cancel an order",
         "description": "Cancel a pending order. If the order is already filled, an error will\n be returned. It is not possible to cancel market orders.",
-        "operationId": "TransactionService_CancelOrder",
+        "operationId": "TradingService_CancelOrder",
         "parameters": [
           {
             "name": "orderId",
@@ -157,6 +254,17 @@
         "summary": "Fetch BTCNOK",
         "description": "Fetches the current BTCNOK price.",
         "operationId": "PublicService_Price",
+        "parameters": [
+          {
+            "name": "amount",
+            "in": "query",
+            "description": "Amount NOK to trade for. If empty, defaults to 5000 NOK.",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -226,6 +334,16 @@
         "summary": "Fetch volume statistics",
         "description": "Returns statistics about the volume of BTCNOK trades.",
         "operationId": "PublicService_Volume",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "description": "The date to fetch the volume for. If empty, defaults to today.\n Format: YYYY-MM-DD",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
@@ -246,11 +364,11 @@
     "/v1/withdrawals/bitcoin": {
       "post": {
         "tags": [
-          "TransactionService"
+          "BitcoinTransferService"
         ],
         "summary": "Initiate withdrawal",
         "description": "Initiates a bitcoin withdrawal. The transaction is not completed until\n it is confirmed by the network it is sent onto. A success response from\n this endpoint means the transaction was successfully initiated, but\n does not guarantee completion.",
-        "operationId": "TransactionService_SendBitcoin",
+        "operationId": "BitcoinTransferService_SendBitcoin",
         "requestBody": {
           "content": {
             "application/json": {
@@ -278,11 +396,11 @@
     "/v1/withdrawals/bitcoin/{withdrawalId}": {
       "get": {
         "tags": [
-          "TransactionService"
+          "BitcoinTransferService"
         ],
         "summary": "Fetch withdrawal",
         "description": "Fetches a bitcoin withdrawal.",
-        "operationId": "TransactionService_GetBitcoinWithdrawal",
+        "operationId": "BitcoinTransferService_GetBitcoinWithdrawal",
         "parameters": [
           {
             "name": "withdrawalId",
@@ -325,6 +443,37 @@
             "type": "number",
             "description": "The current BTC holdings that are tied up in pending orders.",
             "format": "double"
+          }
+        }
+      },
+      "DepositDestination": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string"
+          },
+          "network": {
+            "enum": [
+              "NETWORK_UNSPECIFIED",
+              "NETWORK_BITCOIN",
+              "NETWORK_LIGHTNING"
+            ],
+            "type": "string",
+            "format": "enum"
+          }
+        }
+      },
+      "DepositDestinationsResponse": {
+        "type": "object",
+        "properties": {
+          "onchainAddress": {
+            "$ref": "#/components/schemas/DepositDestination"
+          },
+          "lightningAddress": {
+            "$ref": "#/components/schemas/DepositDestination"
+          },
+          "lnurlPay": {
+            "$ref": "#/components/schemas/DepositDestination"
           }
         }
       },
@@ -396,13 +545,94 @@
           }
         }
       },
+      "GetLightningInvoiceResponse": {
+        "type": "object",
+        "properties": {
+          "depositDestinationId": {
+            "type": "string"
+          },
+          "invoice": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "INVOICE_STATUS_UNSPECIFIED",
+              "INVOICE_STATUS_UNPAID",
+              "INVOICE_STATUS_PENDING",
+              "INVOICE_STATUS_PAID",
+              "INVOICE_STATUS_EXPIRED",
+              "INVOICE_STATUS_CANCELED"
+            ],
+            "type": "string",
+            "format": "enum"
+          }
+        }
+      },
       "LedgerAccountResponse": {
         "type": "object",
         "properties": {}
       },
+      "LedgerEntry": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string",
+            "description": "The ID of the transaction that resulted in this ledger entry."
+          },
+          "type": {
+            "enum": [
+              "ENTRY_TYPE_UNSPECIFIED",
+              "ENTRY_TYPE_WITHDRAWAL",
+              "ENTRY_TYPE_DEPOSIT",
+              "ENTRY_TYPE_TRADE",
+              "ENTRY_TYPE_TRANSFER",
+              "ENTRY_TYPE_REWARD"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "enum": [
+              "CURRENCY_UNSPECIFIED",
+              "CURRENCY_BTC",
+              "CURRENCY_NOK"
+            ],
+            "type": "string",
+            "description": "The currency of the ledger entry. Both the value and the balance are in",
+            "format": "enum"
+          },
+          "value": {
+            "type": "number",
+            "description": "The value of the ledger entry. Negative indicates balance decrease, positive\n indicates balance increase. The fee is included in this value.",
+            "format": "double"
+          },
+          "fee": {
+            "type": "number",
+            "description": "The fee associated with the ledger entry.",
+            "format": "double"
+          },
+          "balance": {
+            "type": "number",
+            "description": "The balance after the transaction.",
+            "format": "double"
+          }
+        },
+        "description": "TODO: investigate how other platforms do this.\n\n Kraken: https://docs.kraken.com/api/docs/rest-api/get-ledgers\n\n Been told Kraken is good!\n\n A ledger entry is a balance-affecting transaction. One action\n on the platform can result in multiple ledger entries. For example, a\n trade results in distinct BTC and NOK ledger entries."
+      },
       "LedgerUserResponse": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntry"
+            }
+          }
+        }
       },
       "ListBitcoinAccountsResponse": {
         "type": "object",
@@ -412,6 +642,49 @@
             "items": {
               "$ref": "#/components/schemas/BitcoinAccount"
             }
+          }
+        }
+      },
+      "NewLightningInvoiceRequest": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "if empty, the default account is used."
+          },
+          "currency": {
+            "enum": [
+              "CURRENCY_UNSPECIFIED",
+              "CURRENCY_BTC",
+              "CURRENCY_NOK"
+            ],
+            "type": "string",
+            "description": "The currency the invoice is denominated in. Once created, the invoice\n is for a specific amount of bitcoin.",
+            "format": "enum"
+          },
+          "amount": {
+            "type": "number",
+            "description": "The amount of the invoice, in the requested currency.",
+            "format": "double"
+          },
+          "publicDescription": {
+            "type": "string",
+            "description": "Public description of the invoice. Shown to both the creator and the\n recipient of the invoice. This is the so-called \"memo\" field of the\n Lightning invoice."
+          },
+          "internalDescription": {
+            "type": "string",
+            "description": "Free-form text description of the invoice. Can be used to correlate with\n your own systems. Only shown to the creator of this invoice, within the\n Bare Bitcoin systems."
+          }
+        }
+      },
+      "NewLightningInvoiceResponse": {
+        "type": "object",
+        "properties": {
+          "depositDestinationId": {
+            "type": "string"
+          },
+          "invoice": {
+            "type": "string"
           }
         }
       },
@@ -524,16 +797,34 @@
           },
           "bid": {
             "type": "number",
+            "description": "Current bid price, without fees.",
             "format": "double"
           },
           "ask": {
             "type": "number",
+            "description": "Current ask price, without fees.",
             "format": "double"
           },
           "timestamp": {
             "type": "string",
             "description": "The time the price was fetched.",
             "format": "date-time"
+          },
+          "card": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              }
+            ],
+            "description": "Effective price, when paying with card."
+          },
+          "bank": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              }
+            ],
+            "description": "Effective price, when paying with bank transfer."
           }
         }
       },
@@ -592,9 +883,50 @@
           }
         }
       },
+      "UserPrice": {
+        "type": "object",
+        "properties": {
+          "buy": {
+            "type": "number",
+            "format": "double"
+          },
+          "sell": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "description": "The prices a user can expect to pay for a given amount of BTCNOK,\n with a given payment method."
+      },
       "VolumeResponse": {
         "type": "object",
-        "properties": {}
+        "properties": {
+          "daily": {
+            "$ref": "#/components/schemas/VolumeStats"
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/VolumeStats"
+          },
+          "yearly": {
+            "$ref": "#/components/schemas/VolumeStats"
+          }
+        }
+      },
+      "VolumeStats": {
+        "type": "object",
+        "properties": {
+          "amountNok": {
+            "type": "number",
+            "format": "double"
+          },
+          "amountBtc": {
+            "type": "number",
+            "format": "double"
+          },
+          "buyPercentage": {
+            "type": "number",
+            "format": "double"
+          }
+        }
       }
     },
     "securitySchemes": {
@@ -627,12 +959,19 @@
   ],
   "tags": [
     {
+      "name": "BitcoinTransferService",
+      "description": "Transfer bitcoin in and out of the platform. Fetch information about past\n bitcoin transfers."
+    },
+    {
+      "name": "LedgerService"
+    },
+    {
       "name": "PublicService",
       "description": "Public endpoints that don't require authentication"
     },
     {
-      "name": "TransactionService",
-      "description": "Execute and cancel orders. Initiate bitcoin transactions. Fetch information about\n past orders."
+      "name": "TradingService",
+      "description": "Execute and cancel orders. Fetch information about past orders."
     },
     {
       "name": "UserService",

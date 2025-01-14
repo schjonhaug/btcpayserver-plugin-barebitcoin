@@ -88,7 +88,43 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
-        return await Task.FromException<LightningInvoice?>(new NotImplementedException());
+        try
+        {
+            var response = await MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
+            var responseObj = JObject.Parse(response);
+
+            // Convert the API response to a LightningInvoice object
+            var status = responseObj["status"]?.Value<string>() switch
+            {
+                "INVOICE_STATUS_UNPAID" => LightningInvoiceStatus.Unpaid,
+                "INVOICE_STATUS_PAID" => LightningInvoiceStatus.Paid,
+                "INVOICE_STATUS_EXPIRED" => LightningInvoiceStatus.Expired,
+                "INVOICE_STATUS_CANCELED" => LightningInvoiceStatus.Expired,
+                _ => LightningInvoiceStatus.Unpaid // Default case
+            };
+
+            var invoice = responseObj["invoice"]?.Value<string>();
+            if (string.IsNullOrEmpty(invoice))
+                return null;
+
+            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+            
+            return new LightningInvoice
+            {
+                Id = invoiceId,
+                BOLT11 = invoice,
+                Status = status,
+                Amount = bolt11.MinimumAmount,
+                ExpiresAt = bolt11.ExpiryDate,
+                PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
+                PaidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : null
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error getting invoice from BareBitcoin");
+            return null;
+        }
     }
 
     public LightningInvoice? ToInvoice(JObject invoice)
@@ -204,7 +240,48 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new())
     {
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
-        return await Task.FromException<LightningInvoice>(new NotImplementedException());
+        try
+        {
+            var requestData = new
+            {
+                accountId = _accountId,
+                currency = "CURRENCY_BTC",
+                amount = createInvoiceRequest.Amount.ToDecimal(LightMoneyUnit.BTC),
+                publicDescription = createInvoiceRequest.Description,
+                internalDescription = $"BTCPay Server Invoice - {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss}"
+            };
+
+            var response = await MakeAuthenticatedRequest(
+                "POST", 
+                "/v1/deposit-destinations/bitcoin/invoice",
+                JsonConvert.SerializeObject(requestData)
+            );
+            
+            var responseObj = JObject.Parse(response);
+            var depositDestinationId = responseObj["depositDestinationId"]?.Value<string>();
+            var invoice = responseObj["invoice"]?.Value<string>();
+
+            if (string.IsNullOrEmpty(invoice))
+                throw new Exception("No invoice returned from BareBitcoin API");
+
+            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+
+            return new LightningInvoice
+            {
+                Id = depositDestinationId ?? bolt11.PaymentHash?.ToString() ?? string.Empty,
+                BOLT11 = invoice,
+                Status = LightningInvoiceStatus.Unpaid,
+                Amount = createInvoiceRequest.Amount,
+                ExpiresAt = bolt11.ExpiryDate,
+                PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
+                PaidAt = null
+            };
+        }
+        catch (Exception ex)
+        {
+            Logger.LogError(ex, "Error creating invoice with BareBitcoin");
+            throw;
+        }
     }
 
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
@@ -517,7 +594,13 @@ public class BareBitcoinLightningClient : ILightningClient
             Logger.LogInformation("Response status: {statusCode}", response.StatusCode);
             Logger.LogInformation("Response content: {content}", responseContent);
             
-            response.EnsureSuccessStatusCode();
+            if (!response.IsSuccessStatusCode)
+            {
+                Logger.LogError("Request failed with status {StatusCode}. Response body: {Body}", 
+                    response.StatusCode, responseContent);
+                response.EnsureSuccessStatusCode(); // This will throw with the status code
+            }
+            
             return responseContent;
         }
         catch (HttpRequestException ex)
