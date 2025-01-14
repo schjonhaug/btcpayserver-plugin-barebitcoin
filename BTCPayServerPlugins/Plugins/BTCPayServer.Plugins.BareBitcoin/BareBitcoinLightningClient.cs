@@ -290,99 +290,6 @@ public class BareBitcoinLightningClient : ILightningClient
         return await Task.FromException<ILightningInvoiceListener>(new NotImplementedException());
     }
 
-    public class BlinkListener : ILightningInvoiceListener
-    {
-        private readonly BareBitcoinLightningClient _lightningClient;
-        private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
-        private readonly IDisposable? _subscription;
-        private readonly IDisposable? _wsSubscriptionDisposable;
-        private readonly TaskCompletionSource streamEnded = new();
-
-        public BlinkListener(GraphQLHttpClient httpClient, BareBitcoinLightningClient lightningClient, ILogger logger)
-        {
-            _lightningClient = lightningClient;
-            try
-            {
-                var stream = httpClient.CreateSubscriptionStream<JObject>(new GraphQLRequest()
-                {
-                    Query = @"subscription myUpdates {
-  myUpdates {
-    update {
-      ... on LnUpdate {
-        transaction {
-          initiationVia {
-            ... on InitiationViaLn {
-              paymentHash
-            }
-          }
-          direction
-        }
-      }
-    }
-  }
-}
-", OperationName = "myUpdates"
-                });
-
-                _subscription = stream.Subscribe(async response =>
-                {
-                    try
-                    {
-                        if(response.Data is null)
-                            return;
-                        if (response.Data.SelectToken("myUpdates.update.transaction.direction")?.Value<string>() != "RECEIVE")
-                            return;
-                        var invoiceId = response.Data
-                            .SelectToken("myUpdates.update.transaction.initiationVia.paymentHash")?.Value<string>();
-                        if (invoiceId is null)
-                            return;
-                        if (await _lightningClient.GetInvoice(invoiceId) is LightningInvoice inv)
-                        {
-                            _invoices.Writer.TryWrite(inv);
-                        }
-                    }
-                    catch (Exception e)
-                    {
-                        logger.LogError(e, "Error while processing detecting lightning invoice payment");
-                    }
-                });
-
-                _wsSubscriptionDisposable = httpClient.WebsocketConnectionState.Subscribe(state =>
-                {
-                    if (state == GraphQLWebsocketConnectionState.Disconnected)
-                    {
-                        streamEnded.TrySetResult();
-                    }
-                });
-            }
-            catch (Exception e)
-            {
-                logger.LogError(e, "Error while creating lightning invoice listener");
-                _subscription?.Dispose();
-                _wsSubscriptionDisposable?.Dispose();
-                streamEnded.TrySetResult();
-            }
-        }
-
-        public void Dispose()
-        {
-            _subscription?.Dispose();
-            _invoices.Writer.TryComplete();
-            _wsSubscriptionDisposable?.Dispose();
-            streamEnded.TrySetResult();
-        }
-
-        public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
-        {
-            var resultz = await Task.WhenAny(streamEnded.Task, _invoices.Reader.ReadAsync(cancellation).AsTask());
-            if (resultz is Task<LightningInvoice> res)
-            {
-                return await res;
-            }
-
-            throw new Exception("Stream disconnected, cannot await invoice");
-        }
-    }
 
     public async Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
@@ -521,31 +428,24 @@ public class BareBitcoinLightningClient : ILightningClient
             var nonceStr = nonce.ToString();
             // Encode data: nonce and raw data
             var encodedData = data != null ? $"{nonceStr}{data}" : nonceStr;
-            Logger.LogInformation("Creating HMAC with encodedData: {encodedData}", encodedData);
 
             // SHA-256 hash of the encoded data
             using var sha256 = System.Security.Cryptography.SHA256.Create();
             var hashedData = sha256.ComputeHash(System.Text.Encoding.UTF8.GetBytes(encodedData));
-            Logger.LogInformation("Hashed data (hex): {hashedData}", BitConverter.ToString(hashedData).Replace("-", ""));
 
             // Concatenate method, path, and hashed data
             var message = new List<byte>();
             message.AddRange(System.Text.Encoding.UTF8.GetBytes(method));
             message.AddRange(System.Text.Encoding.UTF8.GetBytes(path));
             message.AddRange(hashedData);
-            Logger.LogInformation("Combined message (hex): {message}", BitConverter.ToString(message.ToArray()).Replace("-", ""));
 
             // Decode secret from base64
             var decodedSecret = Convert.FromBase64String(secret);
-            Logger.LogInformation("Decoded secret length: {length} bytes", decodedSecret.Length);
 
             // Generate HMAC
             using var hmac = new System.Security.Cryptography.HMACSHA256(decodedSecret);
             var macsum = hmac.ComputeHash(message.ToArray());
-            var result = Convert.ToBase64String(macsum);
-            
-            Logger.LogInformation("Generated HMAC: {hmac}", result);
-            return result;
+            return Convert.ToBase64String(macsum);
         }
         catch (Exception ex)
         {
@@ -561,44 +461,28 @@ public class BareBitcoinLightningClient : ILightningClient
             using var httpClient = new HttpClient();
             var nonce = await GetNextNonce();
             Logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
-            
-            if (data != null)
-            {
-                Logger.LogInformation("Request data: {data}", data);
-            }
 
             var hmac = CreateHmac(_privateKey, method, path, nonce, data);
             
             var requestUrl = $"https://api.bb.no{path}";
-            Logger.LogInformation("Full request URL: {url}", requestUrl);
-            
             var request = new HttpRequestMessage(new HttpMethod(method), requestUrl);
             request.Headers.Add("x-bb-api-hmac", hmac);
             request.Headers.Add("x-bb-api-key", _publicKey);
             request.Headers.Add("x-bb-api-nonce", nonce.ToString());
 
-            Logger.LogInformation("Request headers:");
-            Logger.LogInformation("x-bb-api-hmac: {hmac}", hmac);
-            Logger.LogInformation("x-bb-api-key: {key}", _publicKey);
-            Logger.LogInformation("x-bb-api-nonce: {nonce}", nonce);
-
             if (data != null && method != "GET")
             {
                 request.Content = new StringContent(data, System.Text.Encoding.UTF8, "application/json");
-                Logger.LogInformation("Added request content-type: application/json");
             }
 
             var response = await httpClient.SendAsync(request);
             var responseContent = await response.Content.ReadAsStringAsync();
             
-            Logger.LogInformation("Response status: {statusCode}", response.StatusCode);
-            Logger.LogInformation("Response content: {content}", responseContent);
-            
             if (!response.IsSuccessStatusCode)
             {
                 Logger.LogError("Request failed with status {StatusCode}. Response body: {Body}", 
                     response.StatusCode, responseContent);
-                response.EnsureSuccessStatusCode(); // This will throw with the status code
+                response.EnsureSuccessStatusCode();
             }
             
             return responseContent;
