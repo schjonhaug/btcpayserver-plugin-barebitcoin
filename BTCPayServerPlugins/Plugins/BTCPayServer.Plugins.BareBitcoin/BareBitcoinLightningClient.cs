@@ -287,9 +287,87 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
-        return await Task.FromException<ILightningInvoiceListener>(new NotImplementedException());
+        return new BareBitcoinListener(this, Logger);
     }
 
+    public class BareBitcoinListener : ILightningInvoiceListener
+    {
+        private readonly BareBitcoinLightningClient _lightningClient;
+        private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
+        private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+        private readonly Task _pollingTask;
+        private readonly ILogger _logger;
+        private readonly HashSet<string> _processedInvoices = new HashSet<string>();
+
+        public BareBitcoinListener(BareBitcoinLightningClient lightningClient, ILogger logger)
+        {
+            _lightningClient = lightningClient;
+            _logger = logger;
+            _pollingTask = StartPolling();
+        }
+
+        private async Task StartPolling()
+        {
+            while (!_cts.Token.IsCancellationRequested)
+            {
+                try
+                {
+                    // Get all invoices
+                    var invoices = await _lightningClient.ListInvoices(_cts.Token);
+                    
+                    // Check each invoice
+                    foreach (var invoice in invoices)
+                    {
+                        // Skip if we've already processed this invoice
+                        if (_processedInvoices.Contains(invoice.Id))
+                            continue;
+
+                        // Get fresh status
+                        var currentInvoice = await _lightningClient.GetInvoice(invoice.Id, _cts.Token);
+                        if (currentInvoice?.Status == LightningInvoiceStatus.Paid)
+                        {
+                            _logger.LogInformation("Invoice {InvoiceId} has been paid", invoice.Id);
+                            _processedInvoices.Add(invoice.Id);
+                            await _invoices.Writer.WriteAsync(currentInvoice, _cts.Token);
+                        }
+                    }
+
+                    // Wait before next poll
+                    await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error while polling for invoice updates");
+                    // Wait before retry on error
+                    await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
+                }
+            }
+        }
+
+        public void Dispose()
+        {
+            _cts.Cancel();
+            _cts.Dispose();
+            _invoices.Writer.TryComplete();
+        }
+
+        public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
+        {
+            try
+            {
+                using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _cts.Token);
+                return await _invoices.Reader.ReadAsync(linkedCts.Token);
+            }
+            catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
+            {
+                throw new Exception("Listener has been disposed");
+            }
+        }
+    }
 
     public async Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
