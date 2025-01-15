@@ -312,6 +312,13 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
+            // Ensure we have an active listener
+            if (_currentListener == null)
+            {
+                Logger.LogInformation("No active listener found, creating one");
+                _currentListener = await Listen(cancellation);
+            }
+
             var requestData = new
             {
                 accountId = _accountId,
@@ -347,10 +354,15 @@ public class BareBitcoinLightningClient : ILightningClient
                 PaidAt = null
             };
 
-            // Add the invoice to any active listeners
-            if (_currentListener != null)
+            // Add the invoice to the active listener
+            if (_currentListener is BareBitcoinListener listener)
             {
-                (_currentListener as BareBitcoinListener)?.AddInvoiceToWatch(lightningInvoice);
+                Logger.LogInformation("Adding new invoice {InvoiceId} to active listener", lightningInvoice.Id);
+                listener.AddInvoiceToWatch(lightningInvoice);
+            }
+            else
+            {
+                Logger.LogError("Failed to cast listener to BareBitcoinListener");
             }
 
             return lightningInvoice;
@@ -367,8 +379,16 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
+        // If we already have a listener, dispose it
+        if (_currentListener != null)
+        {
+            Logger.LogInformation("Disposing existing listener");
+            _currentListener.Dispose();
+        }
+        
         var listener = new BareBitcoinListener(this, Logger);
         _currentListener = listener;
+        Logger.LogInformation("Created new listener");
         await Task.CompletedTask;
         return listener;
     }
@@ -378,17 +398,16 @@ public class BareBitcoinLightningClient : ILightningClient
         private readonly BareBitcoinLightningClient _lightningClient;
         private readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>();
         private readonly CancellationTokenSource _cts = new CancellationTokenSource();
-        private readonly Task _pollingTask;
+        private Task? _pollingTask;
         private readonly ILogger _logger;
         private readonly HashSet<string> _processedInvoices = new HashSet<string>();
         private readonly Dictionary<string, LightningInvoice> _pendingInvoices = new Dictionary<string, LightningInvoice>();
+        private readonly object _pollingLock = new object();
 
         public BareBitcoinListener(BareBitcoinLightningClient lightningClient, ILogger logger)
         {
             _lightningClient = lightningClient;
             _logger = logger;
-            _pollingTask = StartPolling();
-            // Don't wait for the task here, let it run in the background
         }
 
         public void AddInvoiceToWatch(LightningInvoice invoice)
@@ -397,6 +416,16 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 _logger.LogInformation("Adding invoice {InvoiceId} to watch list", invoice.Id);
                 _pendingInvoices[invoice.Id] = invoice;
+                
+                // Start polling if not already started
+                lock (_pollingLock)
+                {
+                    if (_pollingTask == null)
+                    {
+                        _logger.LogInformation("Starting polling task for first invoice");
+                        _pollingTask = StartPolling();
+                    }
+                }
             }
         }
 
@@ -408,6 +437,12 @@ public class BareBitcoinLightningClient : ILightningClient
                 try
                 {
                     var pendingIds = _pendingInvoices.Keys.ToList();
+                    if (!pendingIds.Any())
+                    {
+                        _logger.LogInformation("No pending invoices to check, stopping polling task");
+                        break;
+                    }
+                    
                     _logger.LogInformation("Polling cycle started - Checking {Count} pending invoices", pendingIds.Count);
                     
                     foreach (var invoiceId in pendingIds)
@@ -457,6 +492,11 @@ public class BareBitcoinLightningClient : ILightningClient
                 }
             }
             _logger.LogInformation("Polling task ended");
+            
+            lock (_pollingLock)
+            {
+                _pollingTask = null;
+            }
         }
 
         public void Dispose()
@@ -465,8 +505,7 @@ public class BareBitcoinLightningClient : ILightningClient
             _cts.Cancel();
             try
             {
-                // Wait for polling task to complete
-                if (!_pollingTask.Wait(TimeSpan.FromSeconds(5)))
+                if (_pollingTask != null && !_pollingTask.Wait(TimeSpan.FromSeconds(5)))
                 {
                     _logger.LogWarning("Polling task did not complete within timeout during disposal");
                 }
