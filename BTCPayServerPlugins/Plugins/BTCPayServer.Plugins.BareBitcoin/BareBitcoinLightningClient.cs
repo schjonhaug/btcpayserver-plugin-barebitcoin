@@ -108,10 +108,6 @@ public class BareBitcoinLightningClient : ILightningClient
                 return null;
             }
 
-            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
-            var amount = bolt11.MinimumAmount;
-            
-            // Convert the API response to a LightningInvoice object
             var status = responseObj["status"]?.Value<string>() switch
             {
                 "INVOICE_STATUS_UNPAID" => LightningInvoiceStatus.Unpaid,
@@ -121,26 +117,14 @@ public class BareBitcoinLightningClient : ILightningClient
                 _ => LightningInvoiceStatus.Unpaid // Default case
             };
 
-            var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+            var amount = bolt11.MinimumAmount;
             var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
-            
-            // For paid invoices, get the preimage from the response or generate one
-            string? preimage = null;
-            if (status == LightningInvoiceStatus.Paid)
-            {
-                // Try to get preimage from response first
-                preimage = responseObj["preimage"]?.Value<string>();
-                
-                // If no preimage in response, use payment hash as preimage
-                // This is safe because the payment hash is the SHA256 of the preimage
-                if (string.IsNullOrEmpty(preimage))
-                {
-                    preimage = paymentHash;
-                    Logger.LogInformation("No preimage in response, using payment hash as preimage");
-                }
-            }
-            
+            var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
             var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
+            var preimage = status == LightningInvoiceStatus.Paid ? 
+                (responseObj["preimage"]?.Value<string>() ?? paymentHash) : 
+                null;
 
             // Only remove from tracking if paid or expired
             if (status == LightningInvoiceStatus.Expired || status == LightningInvoiceStatus.Paid)
@@ -568,17 +552,19 @@ public class BareBitcoinLightningClient : ILightningClient
                         latestInvoice.Id, latestInvoice.Status, latestInvoice.AmountReceived, latestInvoice.PaymentHash, latestInvoice.Preimage);
 
                     // Create a new invoice object with all required fields set
+                    var bolt11 = BOLT11PaymentRequest.Parse(latestInvoice.BOLT11, _lightningClient._network);
                     var paidInvoice = new LightningInvoice
                     {
                         Id = latestInvoice.Id,
                         BOLT11 = latestInvoice.BOLT11,
                         Status = LightningInvoiceStatus.Paid,
-                        Amount = latestInvoice.Amount,
-                        AmountReceived = latestInvoice.Amount, // Always set AmountReceived to Amount for paid invoices
-                        ExpiresAt = latestInvoice.ExpiresAt,
-                        PaymentHash = latestInvoice.PaymentHash,
+                        Amount = bolt11.MinimumAmount,
+                        AmountReceived = bolt11.MinimumAmount,
+                        ExpiresAt = bolt11.ExpiryDate,
+                        PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
                         PaidAt = DateTimeOffset.UtcNow,
-                        Preimage = latestInvoice.Preimage ?? latestInvoice.PaymentHash // Use payment hash as preimage if not provided
+                        // Use payment hash as preimage if not provided
+                        Preimage = latestInvoice.Preimage ?? bolt11.PaymentHash?.ToString()
                     };
                     
                     _logger.LogInformation("Returning paid invoice to BTCPay with Status: {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
