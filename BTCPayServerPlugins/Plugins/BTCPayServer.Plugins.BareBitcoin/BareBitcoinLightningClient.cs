@@ -336,7 +336,7 @@ public class BareBitcoinLightningClient : ILightningClient
 
             var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
 
-            return new LightningInvoice
+            var lightningInvoice = new LightningInvoice
             {
                 Id = depositDestinationId ?? bolt11.PaymentHash?.ToString() ?? string.Empty,
                 BOLT11 = invoice,
@@ -346,6 +346,14 @@ public class BareBitcoinLightningClient : ILightningClient
                 PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
                 PaidAt = null
             };
+
+            // Add the invoice to any active listeners
+            if (_currentListener != null)
+            {
+                (_currentListener as BareBitcoinListener)?.AddInvoiceToWatch(lightningInvoice);
+            }
+
+            return lightningInvoice;
         }
         catch (Exception ex)
         {
@@ -354,11 +362,14 @@ public class BareBitcoinLightningClient : ILightningClient
         }
     }
 
+    private ILightningInvoiceListener? _currentListener;
+
     public async Task<ILightningInvoiceListener> Listen(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("Listen()");
         var listener = new BareBitcoinListener(this, Logger);
-        await Task.CompletedTask; // Add await to satisfy compiler
+        _currentListener = listener;
+        await Task.CompletedTask;
         return listener;
     }
 
@@ -370,69 +381,103 @@ public class BareBitcoinLightningClient : ILightningClient
         private readonly Task _pollingTask;
         private readonly ILogger _logger;
         private readonly HashSet<string> _processedInvoices = new HashSet<string>();
+        private readonly Dictionary<string, LightningInvoice> _pendingInvoices = new Dictionary<string, LightningInvoice>();
 
         public BareBitcoinListener(BareBitcoinLightningClient lightningClient, ILogger logger)
         {
             _lightningClient = lightningClient;
             _logger = logger;
             _pollingTask = StartPolling();
+            // Don't wait for the task here, let it run in the background
+        }
+
+        public void AddInvoiceToWatch(LightningInvoice invoice)
+        {
+            if (invoice.Status == LightningInvoiceStatus.Unpaid && !_processedInvoices.Contains(invoice.Id))
+            {
+                _logger.LogInformation("Adding invoice {InvoiceId} to watch list", invoice.Id);
+                _pendingInvoices[invoice.Id] = invoice;
+            }
         }
 
         private async Task StartPolling()
         {
+            _logger.LogInformation("Starting invoice polling task");
             while (!_cts.Token.IsCancellationRequested)
             {
                 try
                 {
-                    // Get all invoices
-                    var invoices = await _lightningClient.ListInvoices(_cts.Token);
+                    var pendingIds = _pendingInvoices.Keys.ToList();
+                    _logger.LogInformation("Polling cycle started - Checking {Count} pending invoices", pendingIds.Count);
                     
-                    // Check each invoice
-                    foreach (var invoice in invoices)
+                    foreach (var invoiceId in pendingIds)
                     {
-                        // Skip if we've already processed this invoice
-                        if (_processedInvoices.Contains(invoice.Id))
-                            continue;
-
-                        // Get fresh status
-                        var currentInvoice = await _lightningClient.GetInvoice(invoice.Id, _cts.Token);
-                        if (currentInvoice != null && currentInvoice.Status == LightningInvoiceStatus.Paid)
+                        if (_processedInvoices.Contains(invoiceId))
                         {
-                            _logger.LogInformation("Invoice {InvoiceId} has been paid", invoice.Id);
-                            _processedInvoices.Add(invoice.Id);
-                            await _invoices.Writer.WriteAsync(currentInvoice, _cts.Token);
+                            _logger.LogInformation("Invoice {InvoiceId} already processed, skipping", invoiceId);
+                            continue;
+                        }
+
+                        _logger.LogInformation("Checking status of invoice {InvoiceId}", invoiceId);
+                        var currentInvoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
+                        if (currentInvoice != null)
+                        {
+                            if (currentInvoice.Status == LightningInvoiceStatus.Paid)
+                            {
+                                _logger.LogInformation("Invoice {InvoiceId} has been paid", invoiceId);
+                                _processedInvoices.Add(invoiceId);
+                                _pendingInvoices.Remove(invoiceId);
+                                await _invoices.Writer.WriteAsync(currentInvoice, _cts.Token);
+                            }
+                            else if (currentInvoice.Status == LightningInvoiceStatus.Expired)
+                            {
+                                _logger.LogInformation("Invoice {InvoiceId} has expired", invoiceId);
+                                _processedInvoices.Add(invoiceId);
+                                _pendingInvoices.Remove(invoiceId);
+                            }
+                            else
+                            {
+                                _logger.LogInformation("Invoice {InvoiceId} status: {Status}", invoiceId, currentInvoice.Status);
+                            }
                         }
                     }
 
-                    // Wait before next poll
+                    _logger.LogInformation("Polling cycle completed - Waiting 2 seconds before next poll");
                     await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
                 }
                 catch (OperationCanceledException)
                 {
+                    _logger.LogInformation("Polling task cancelled");
                     break;
                 }
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, "Error while polling for invoice updates");
-                    // Wait before retry on error
                     await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
                 }
             }
+            _logger.LogInformation("Polling task ended");
         }
 
         public void Dispose()
         {
+            _logger.LogInformation("Disposing listener");
             _cts.Cancel();
             try
             {
-                _pollingTask.Wait(TimeSpan.FromSeconds(5));
+                // Wait for polling task to complete
+                if (!_pollingTask.Wait(TimeSpan.FromSeconds(5)))
+                {
+                    _logger.LogWarning("Polling task did not complete within timeout during disposal");
+                }
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore any errors during disposal
+                _logger.LogError(ex, "Error while disposing listener");
             }
             _cts.Dispose();
             _invoices.Writer.TryComplete();
+            _logger.LogInformation("Listener disposed");
         }
 
         public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
