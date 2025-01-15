@@ -101,6 +101,16 @@ public class BareBitcoinLightningClient : ILightningClient
             var response = await MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
             var responseObj = JObject.Parse(response);
 
+            var invoice = responseObj["invoice"]?.Value<string>();
+            if (string.IsNullOrEmpty(invoice))
+            {
+                Logger.LogWarning("Invoice {InvoiceId} not found or empty response", invoiceId);
+                return null;
+            }
+
+            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+            var amount = bolt11.MinimumAmount;
+            
             // Convert the API response to a LightningInvoice object
             var status = responseObj["status"]?.Value<string>() switch
             {
@@ -111,14 +121,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 _ => LightningInvoiceStatus.Unpaid // Default case
             };
 
-            var invoice = responseObj["invoice"]?.Value<string>();
-            if (string.IsNullOrEmpty(invoice))
-            {
-                Logger.LogWarning("Invoice {InvoiceId} not found or empty response", invoiceId);
-                return null;
-            }
-
-            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+            var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
             
             // Only remove from tracking if paid or expired
             if (status == LightningInvoiceStatus.Expired || status == LightningInvoiceStatus.Paid)
@@ -137,16 +140,18 @@ public class BareBitcoinLightningClient : ILightningClient
                     _invoiceTrackingLock.Release();
                 }
             }
-            
+
             return new LightningInvoice
             {
                 Id = invoiceId,
                 BOLT11 = invoice,
                 Status = status,
-                Amount = bolt11.MinimumAmount,
+                Amount = amount,
+                AmountReceived = status == LightningInvoiceStatus.Paid ? amount : null,
                 ExpiresAt = bolt11.ExpiryDate,
                 PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
-                PaidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : null
+                PaidAt = paidAt,
+                Preimage = responseObj["preimage"]?.Value<string>()
             };
         }
         catch (Exception ex)
@@ -163,19 +168,21 @@ public class BareBitcoinLightningClient : ILightningClient
             return null;
             
         var bolt11 = BOLT11PaymentRequest.Parse(paymentRequest, _network);
+        var status = (invoice["paymentStatus"]?.Value<string>()) switch
+        {
+            "EXPIRED" => LightningInvoiceStatus.Expired,
+            "PAID" => LightningInvoiceStatus.Paid,
+            "PENDING" => LightningInvoiceStatus.Unpaid,
+            _ => LightningInvoiceStatus.Unpaid // Default case
+        };
+        
         return new LightningInvoice()
         {
             Id = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
             Amount = invoice["satoshis"] is null ? bolt11.MinimumAmount : LightMoney.Satoshis(invoice["satoshis"]!.Value<long>()),
             Preimage = invoice["paymentSecret"]?.Value<string>(),
-            PaidAt = (invoice["paymentStatus"]?.Value<string>()) == "PAID" ? DateTimeOffset.UtcNow : null,
-            Status = (invoice["paymentStatus"]?.Value<string>()) switch
-            {
-                "EXPIRED" => LightningInvoiceStatus.Expired,
-                "PAID" => LightningInvoiceStatus.Paid,
-                "PENDING" => LightningInvoiceStatus.Unpaid,
-                _ => LightningInvoiceStatus.Unpaid // Default case
-            },
+            PaidAt = (status == LightningInvoiceStatus.Paid) ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
+            Status = status,
             BOLT11 = paymentRequest,
             PaymentHash = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
             ExpiresAt = bolt11.ExpiryDate
@@ -410,7 +417,6 @@ public class BareBitcoinLightningClient : ILightningClient
         private readonly ILogger _logger;
         private readonly HashSet<string> _processedPayments = new HashSet<string>();
         private readonly HashSet<string> _watchedInvoices = new HashSet<string>();
-        internal Action? OnInitialized { get; set; }
 
         public BareBitcoinListener(BareBitcoinLightningClient lightningClient, ILogger logger)
         {
@@ -422,7 +428,6 @@ public class BareBitcoinLightningClient : ILightningClient
         private async Task StartPolling()
         {
             _logger.LogInformation("Starting invoice polling task");
-            bool isFirstRun = true;
 
             while (!_cts.Token.IsCancellationRequested)
             {
@@ -449,7 +454,7 @@ public class BareBitcoinLightningClient : ILightningClient
                     // Check each watched invoice
                     foreach (var invoiceId in _watchedInvoices.ToList())
                     {
-                        _logger.LogInformation("Checking status of invoice {InvoiceId}", invoiceId);
+                        _logger.LogDebug("Checking status of invoice {InvoiceId}", invoiceId);
                         var invoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
                         
                         if (invoice == null)
@@ -461,11 +466,20 @@ public class BareBitcoinLightningClient : ILightningClient
 
                         if (invoice.Status == LightningInvoiceStatus.Paid)
                         {
-                            if (!_processedPayments.Contains(invoice.PaymentHash))
+                            if (!_processedPayments.Contains(invoice.Id))
                             {
                                 _logger.LogInformation("Invoice {InvoiceId} has been paid, notifying BTCPay", invoice.Id);
-                                _processedPayments.Add(invoice.PaymentHash);
-                                await _invoices.Writer.WriteAsync(invoice, _cts.Token);
+                                _processedPayments.Add(invoice.Id);
+                                
+                                try 
+                                {
+                                    await _invoices.Writer.WriteAsync(invoice, _cts.Token);
+                                    _logger.LogInformation("Successfully wrote payment notification to channel for invoice {InvoiceId}", invoice.Id);
+                                }
+                                catch (Exception ex)
+                                {
+                                    _logger.LogError(ex, "Failed to write payment notification to channel for invoice {InvoiceId}", invoice.Id);
+                                }
                             }
                             _watchedInvoices.Remove(invoiceId);
                         }
@@ -478,15 +492,9 @@ public class BareBitcoinLightningClient : ILightningClient
 
                     if (_watchedInvoices.Count > 0)
                     {
-                        _logger.LogInformation("Currently watching {Count} invoices: {Invoices}", 
+                        _logger.LogDebug("Currently watching {Count} invoices: {Invoices}", 
                             _watchedInvoices.Count,
                             string.Join(", ", _watchedInvoices));
-                    }
-
-                    if (isFirstRun)
-                    {
-                        isFirstRun = false;
-                        OnInitialized?.Invoke();
                     }
 
                     await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
@@ -505,28 +513,34 @@ public class BareBitcoinLightningClient : ILightningClient
 
         public void Dispose()
         {
+            _logger.LogInformation("Disposing listener");
             _cts.Cancel();
             try
             {
                 _pollingTask.Wait(TimeSpan.FromSeconds(5));
             }
-            catch
+            catch (Exception ex)
             {
-                // Ignore any errors during disposal
+                _logger.LogError(ex, "Error while waiting for polling task to complete during disposal");
             }
             _cts.Dispose();
             _invoices.Writer.TryComplete();
+            _logger.LogInformation("Listener disposed");
         }
 
         public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
         {
+            _logger.LogInformation("WaitInvoice called, waiting for payment notification");
             try
             {
                 using var linkedCts = CancellationTokenSource.CreateLinkedTokenSource(cancellation, _cts.Token);
-                return await _invoices.Reader.ReadAsync(linkedCts.Token);
+                var invoice = await _invoices.Reader.ReadAsync(linkedCts.Token);
+                _logger.LogInformation("Payment notification received for invoice {InvoiceId} with status {Status}", invoice.Id, invoice.Status);
+                return invoice;
             }
             catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
             {
+                _logger.LogWarning("WaitInvoice cancelled because listener was disposed");
                 throw new Exception("Listener has been disposed");
             }
         }
