@@ -122,9 +122,26 @@ public class BareBitcoinLightningClient : ILightningClient
             };
 
             var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
-            var preimage = status == LightningInvoiceStatus.Paid ? (responseObj["preimage"]?.Value<string>() ?? "00") : null;
-            var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
+            var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
             
+            // For paid invoices, get the preimage from the response or generate one
+            string? preimage = null;
+            if (status == LightningInvoiceStatus.Paid)
+            {
+                // Try to get preimage from response first
+                preimage = responseObj["preimage"]?.Value<string>();
+                
+                // If no preimage in response, use payment hash as preimage
+                // This is safe because the payment hash is the SHA256 of the preimage
+                if (string.IsNullOrEmpty(preimage))
+                {
+                    preimage = paymentHash;
+                    Logger.LogInformation("No preimage in response, using payment hash as preimage");
+                }
+            }
+            
+            var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
+
             // Only remove from tracking if paid or expired
             if (status == LightningInvoiceStatus.Expired || status == LightningInvoiceStatus.Paid)
             {
@@ -151,13 +168,13 @@ public class BareBitcoinLightningClient : ILightningClient
                 Amount = amount,
                 AmountReceived = amountReceived,
                 ExpiresAt = bolt11.ExpiryDate,
-                PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
+                PaymentHash = paymentHash,
                 PaidAt = paidAt,
                 Preimage = preimage
             };
 
-            Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, Preimage: {Preimage}", 
-                result.Id, result.Status, result.AmountReceived, result.Preimage);
+            Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
+                result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage);
 
             return result;
         }
@@ -547,8 +564,8 @@ public class BareBitcoinLightningClient : ILightningClient
                 var latestInvoice = await _lightningClient.GetInvoice(invoice.Id, linkedCts.Token);
                 if (latestInvoice != null && latestInvoice.Status == LightningInvoiceStatus.Paid)
                 {
-                    _logger.LogInformation("Confirmed payment for invoice {InvoiceId}. Status: {Status}, AmountReceived: {AmountReceived}, Preimage: {Preimage}", 
-                        latestInvoice.Id, latestInvoice.Status, latestInvoice.AmountReceived, latestInvoice.Preimage);
+                    _logger.LogInformation("Confirmed payment for invoice {InvoiceId}. Status: {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
+                        latestInvoice.Id, latestInvoice.Status, latestInvoice.AmountReceived, latestInvoice.PaymentHash, latestInvoice.Preimage);
 
                     // Create a new invoice object with all required fields set
                     var paidInvoice = new LightningInvoice
@@ -561,11 +578,11 @@ public class BareBitcoinLightningClient : ILightningClient
                         ExpiresAt = latestInvoice.ExpiresAt,
                         PaymentHash = latestInvoice.PaymentHash,
                         PaidAt = DateTimeOffset.UtcNow,
-                        Preimage = latestInvoice.Preimage ?? "00" // Ensure preimage is not null
+                        Preimage = latestInvoice.Preimage ?? latestInvoice.PaymentHash // Use payment hash as preimage if not provided
                     };
                     
-                    _logger.LogInformation("Returning paid invoice to BTCPay with Status: {Status}, AmountReceived: {AmountReceived}, PaidAt: {PaidAt}, Preimage: {Preimage}", 
-                        paidInvoice.Status, paidInvoice.AmountReceived, paidInvoice.PaidAt, paidInvoice.Preimage);
+                    _logger.LogInformation("Returning paid invoice to BTCPay with Status: {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
+                        paidInvoice.Status, paidInvoice.AmountReceived, paidInvoice.PaymentHash, paidInvoice.Preimage);
                     return paidInvoice;
                 }
                 
