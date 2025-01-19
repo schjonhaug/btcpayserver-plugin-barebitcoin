@@ -14,21 +14,25 @@ public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly BareBitcoinLightningClient _lightningClient;
     private readonly BareBitcoinInvoiceService _invoiceService;
-    private static readonly Channel<LightningInvoice> _invoices = Channel.CreateUnbounded<LightningInvoice>(new UnboundedChannelOptions 
-    { 
-        SingleReader = false,
-        SingleWriter = false
-    });
+    private readonly Channel<LightningInvoice> _invoices;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
     private readonly HashSet<string> _watchedInvoices = new HashSet<string>();
+    private bool _isDisposed;
+
+    public bool IsDisposed => _isDisposed;
 
     public BareBitcoinListener(BareBitcoinLightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger)
     {
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
+        _invoices = Channel.CreateUnbounded<LightningInvoice>(new UnboundedChannelOptions 
+        { 
+            SingleReader = true,
+            SingleWriter = true
+        });
         _pollingTask = StartPolling();
     }
 
@@ -42,13 +46,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
             {
                 // Get the current list of invoices to watch
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
+                _logger.LogInformation("Found {Count} tracked invoices", trackedInvoices.Count);
+                
+                // Update our watch list
+                _watchedInvoices.Clear();
                 foreach (var invoiceId in trackedInvoices)
                 {
-                    if (!_watchedInvoices.Contains(invoiceId))
-                    {
-                        _logger.LogInformation("Adding invoice {InvoiceId} to watch list", invoiceId);
-                        _watchedInvoices.Add(invoiceId);
-                    }
+                    _logger.LogInformation("Adding/checking invoice {InvoiceId} in watch list", invoiceId);
+                    _watchedInvoices.Add(invoiceId);
                 }
 
                 // Check each watched invoice
@@ -65,6 +70,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         continue;
                     }
 
+                    _logger.LogInformation("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has been paid, attempting to write to channel", invoice.Id);
@@ -82,10 +88,6 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         _logger.LogInformation("Invoice {InvoiceId} has expired, removing from watch list", invoiceId);
                         _watchedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
-                    }
-                    else
-                    {
-                        _logger.LogInformation("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     }
                 }
 
@@ -107,32 +109,37 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     public void Dispose()
     {
+        if (_isDisposed)
+            return;
+
         _logger.LogInformation("Disposing listener");
         _cts.Cancel();
         try
         {
             _pollingTask.Wait(TimeSpan.FromSeconds(5));
+            _invoices.Writer.Complete();
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error while waiting for polling task to complete during disposal");
         }
         _cts.Dispose();
-        // Do not complete the channel writer when disposing - it's shared between listeners
+        _isDisposed = true;
         _logger.LogInformation("Listener disposed");
     }
 
     public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
     {
+        if (_isDisposed)
+            throw new ObjectDisposedException(nameof(BareBitcoinListener));
+
         _logger.LogInformation("WaitInvoice called, waiting for payment notification");
         try 
         {
-            _logger.LogInformation("Starting to read from channel (Reader.Count: {Count})", _invoices.Reader.Count);
-            _logger.LogInformation("About to call ReadAsync on channel");
+            _logger.LogInformation("About to read from channel");
             var invoice = await _invoices.Reader.ReadAsync(cancellation);
-            _logger.LogInformation("ReadAsync completed successfully");
-            _logger.LogInformation("Successfully read invoice {InvoiceId} with status {Status} from channel (Reader.Count: {Count})", 
-                invoice.Id, invoice.Status, _invoices.Reader.Count);
+            _logger.LogInformation("Successfully read invoice {InvoiceId} with status {Status} from channel", 
+                invoice.Id, invoice.Status);
             return invoice;
         }
         catch (OperationCanceledException ex)

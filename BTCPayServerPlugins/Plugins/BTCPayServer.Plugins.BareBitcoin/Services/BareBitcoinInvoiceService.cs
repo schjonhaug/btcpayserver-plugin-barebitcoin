@@ -10,7 +10,13 @@ public class BareBitcoinInvoiceService
 {
     private readonly HashSet<string> _knownInvoiceIds = new HashSet<string>();
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
-    private readonly ILogger _logger;
+    private ILogger _logger;
+
+    public ILogger Logger
+    {
+        get => _logger;
+        set => _logger = value;
+    }
 
     public BareBitcoinInvoiceService(ILogger logger)
     {

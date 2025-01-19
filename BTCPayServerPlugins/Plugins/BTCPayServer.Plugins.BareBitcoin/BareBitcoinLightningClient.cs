@@ -1,4 +1,4 @@
-﻿#nullable enable
+#nullable enable
 using System;
 using System.Collections.Generic;
 using System.Linq;
@@ -25,11 +25,18 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly Network _network;
     private readonly BareBitcoinApiService _apiService;
     private readonly BareBitcoinBalanceService _balanceService;
-    private readonly BareBitcoinInvoiceService _invoiceService;
+    private static readonly BareBitcoinInvoiceService _invoiceService;
+    private static readonly object _invoiceServiceLock = new object();
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
+
+    static BareBitcoinLightningClient()
+    {
+        // Initialize the singleton invoice service
+        _invoiceService = new BareBitcoinInvoiceService(null!); // Logger will be set in constructor
+    }
 
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
     {
@@ -43,7 +50,15 @@ public class BareBitcoinLightningClient : ILightningClient
         
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
-        _invoiceService = new BareBitcoinInvoiceService(logger);
+        
+        // Set the logger for the invoice service
+        lock (_invoiceServiceLock)
+        {
+            if (_invoiceService.Logger == null)
+            {
+                _invoiceService.Logger = logger;
+            }
+        }
     }
 
     public override string ToString()
@@ -263,19 +278,6 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
-            // Start listener in background
-            _ = Task.Run(async () => 
-            {
-                try 
-                {
-                    await Listen(CancellationToken.None);
-                }
-                catch (Exception ex)
-                {
-                    Logger.LogError(ex, "Error starting listener");
-                }
-            });
-
             var requestData = new
             {
                 accountId = _accountId,
@@ -328,14 +330,22 @@ public class BareBitcoinLightningClient : ILightningClient
         await _listenerLock.WaitAsync(cancellation);
         try
         {
-            // If we have a current listener, check if it's still active
-            if (_currentListener is BareBitcoinListener listener)
+            // If we have a current listener that's not disposed, return it
+            if (_currentListener is BareBitcoinListener listener && !listener.IsDisposed)
             {
                 Logger.LogInformation("Returning existing listener");
                 return listener;
             }
 
             // If we get here, either _currentListener is null or it's been disposed
+            // Dispose the old listener if it exists
+            if (_currentListener != null)
+            {
+                Logger.LogInformation("Disposing old listener");
+                _currentListener.Dispose();
+                _currentListener = null;
+            }
+
             Logger.LogInformation("Creating new listener");
             _currentListener = new BareBitcoinListener(this, _invoiceService, Logger);
             return _currentListener;
