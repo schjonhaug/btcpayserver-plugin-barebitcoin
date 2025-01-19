@@ -10,14 +10,21 @@ using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
+/// <summary>
+/// Handles the actual monitoring of invoices by polling their status and notifying when payments are detected.
+/// Each listener maintains its own working copy of tracked invoices, refreshed from the central registry during each polling cycle.
+/// </summary>
 public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly BareBitcoinLightningClient _lightningClient;
     private readonly BareBitcoinInvoiceService _invoiceService;
+    // Channel for communicating paid invoices back to BTCPay Server
     private readonly Channel<LightningInvoice> _invoices;
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
+    // Working copy of tracked invoices, refreshed from the central registry in BareBitcoinInvoiceService
+    // during each polling cycle. This is instance-specific and not shared between listeners.
     private readonly HashSet<string> _trackedInvoices = new HashSet<string>();
     private bool _isDisposed;
 
@@ -38,6 +45,13 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _pollingTask = StartPolling();
     }
 
+    /// <summary>
+    /// Main polling loop that monitors tracked invoices for payment status changes.
+    /// During each cycle, it:
+    /// 1. Refreshes its working copy from the central registry
+    /// 2. Checks each tracked invoice for updates
+    /// 3. Notifies of any detected payments via the channel
+    /// </summary>
     private async Task StartPolling()
     {
         _logger.LogInformation("Starting invoice polling task");
