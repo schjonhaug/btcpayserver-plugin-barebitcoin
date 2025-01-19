@@ -11,18 +11,24 @@ using Microsoft.Extensions.Logging;
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
-/// Handles the actual monitoring of invoices by polling their status and notifying when payments are detected.
+/// Handles the monitoring of invoices by polling their status and notifying when payments are detected.
 /// Each listener maintains its own working copy of tracked invoices, refreshed from the central registry during each polling cycle.
+/// This implementation uses a polling approach with a bounded channel for payment notifications.
 /// </summary>
 public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly BareBitcoinLightningClient _lightningClient;
     private readonly BareBitcoinInvoiceService _invoiceService;
+    
     // Channel for communicating paid invoices back to BTCPay Server
+    // Uses a bounded channel with a capacity of 100 to prevent memory issues
     private readonly Channel<LightningInvoice> _invoices;
+    
+    // Cancellation and task management
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
+    
     // Working copy of tracked invoices, refreshed from the central registry in BareBitcoinInvoiceService
     // during each polling cycle. This is instance-specific and not shared between listeners.
     private readonly HashSet<string> _trackedInvoices = new HashSet<string>();
@@ -30,18 +36,26 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     public bool IsDisposed => _isDisposed;
 
+    /// <summary>
+    /// Initializes a new instance of the BareBitcoinListener.
+    /// Sets up the bounded channel and starts the polling task.
+    /// </summary>
     public BareBitcoinListener(BareBitcoinLightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger)
     {
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
         _cts = new CancellationTokenSource();
+        
+        // Initialize bounded channel with single reader/writer for thread safety
         _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(100)
         {
             SingleWriter = true,
             SingleReader = true,
             FullMode = BoundedChannelFullMode.Wait
         });
+        
+        // Start the polling task immediately
         _pollingTask = StartPolling();
     }
 
@@ -54,7 +68,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// </summary>
     private async Task StartPolling()
     {
-        _logger.LogInformation("Starting invoice polling task");
+        _logger.LogDebug("Starting invoice polling task");
 
         while (!_cts.Token.IsCancellationRequested)
         {
@@ -62,22 +76,24 @@ public class BareBitcoinListener : ILightningInvoiceListener
             {
                 // Get the current list of invoices to track
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
-                _logger.LogInformation("Found {Count} tracked invoices", trackedInvoices.Count);
+                _logger.LogDebug("Found {Count} tracked invoices", trackedInvoices.Count);
                 
                 // Update our tracking list
                 _trackedInvoices.Clear();
                 foreach (var invoiceId in trackedInvoices)
                 {
-                    _logger.LogInformation("Adding invoice {InvoiceId} to tracking list", invoiceId);
+                    _logger.LogDebug("Adding invoice {InvoiceId} to tracking list", invoiceId);
                     _trackedInvoices.Add(invoiceId);
                 }
 
-                // Check each tracked invoice
-                _logger.LogInformation("Polling {Count} tracked invoices for updates", _trackedInvoices.Count);
+                // Check each tracked invoice for status updates
+                _logger.LogDebug("Polling {Count} tracked invoices for updates", _trackedInvoices.Count);
                 foreach (var invoiceId in _trackedInvoices.ToList())
                 {
+                    _logger.LogDebug("Polling invoice {InvoiceId}", invoiceId);
                     var invoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
                     
+                    // Handle invoice no longer existing
                     if (invoice == null)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
@@ -86,12 +102,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         continue;
                     }
 
-                    _logger.LogInformation("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
+                    // Process invoice based on its status
+                    _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
+                        // Attempt to notify BTCPay Server of the payment via the channel
                         _logger.LogInformation("Invoice {InvoiceId} has been paid, attempting to write to channel", invoice.Id);
                         var writeResult = _invoices.Writer.TryWrite(invoice);
-                        _logger.LogInformation("Write to channel for invoice {InvoiceId} result: {Result}", invoice.Id, writeResult);
+                        _logger.LogDebug("Write to channel for invoice {InvoiceId} result: {Result}", invoice.Id, writeResult);
                         if (!writeResult)
                         {
                             _logger.LogWarning("Failed to write paid invoice {InvoiceId} to channel", invoice.Id);
@@ -107,12 +125,13 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     }
                 }
 
-                _logger.LogInformation("Polling cycle complete, waiting 2 seconds before next cycle");
+                // Wait before next polling cycle
+                _logger.LogDebug("Polling cycle complete, waiting 2 seconds before next cycle");
                 await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
             }
             catch (OperationCanceledException)
             {
-                _logger.LogInformation("Polling cancelled");
+                _logger.LogDebug("Polling cancelled");
                 break;
             }
             catch (Exception ex)
@@ -123,12 +142,16 @@ public class BareBitcoinListener : ILightningInvoiceListener
         }
     }
 
+    /// <summary>
+    /// Implements IDisposable to clean up resources and stop the polling task.
+    /// Ensures graceful shutdown of the polling loop and channel.
+    /// </summary>
     public void Dispose()
     {
         if (_isDisposed)
             return;
 
-        _logger.LogInformation("Disposing listener");
+        _logger.LogDebug("Disposing listener");
         _cts.Cancel();
         try
         {
@@ -141,26 +164,32 @@ public class BareBitcoinListener : ILightningInvoiceListener
         }
         _cts.Dispose();
         _isDisposed = true;
-        _logger.LogInformation("Listener disposed");
+        _logger.LogDebug("Listener disposed");
     }
 
+    /// <summary>
+    /// Waits for and returns the next paid invoice notification from the channel.
+    /// This method is called by BTCPay Server to receive payment notifications.
+    /// </summary>
+    /// <param name="cancellation">Token to cancel the wait operation</param>
+    /// <returns>The next paid invoice</returns>
     public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
     {
         if (_isDisposed)
             throw new ObjectDisposedException(nameof(BareBitcoinListener));
 
-        _logger.LogInformation("WaitInvoice called, waiting for payment notification");
+        _logger.LogDebug("WaitInvoice called, waiting for payment notification");
         try 
         {
-            _logger.LogInformation("About to read from channel");
+            _logger.LogDebug("About to read from channel");
             var invoice = await _invoices.Reader.ReadAsync(cancellation);
-            _logger.LogInformation("Successfully read invoice {InvoiceId} with status {Status} from channel", 
+            _logger.LogDebug("Successfully read invoice {InvoiceId} with status {Status} from channel", 
                 invoice.Id, invoice.Status);
             return invoice;
         }
         catch (OperationCanceledException ex)
         {
-            _logger.LogWarning("WaitInvoice was cancelled: {Message}", ex.Message);
+            _logger.LogDebug("WaitInvoice was cancelled: {Message}", ex.Message);
             throw;
         }
         catch (Exception ex)

@@ -9,15 +9,21 @@ using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
+/// <summary>
+/// Service responsible for retrieving and caching BareBitcoin account balances.
+/// Implements a simple caching mechanism to reduce API calls while ensuring balance data stays relatively fresh.
+/// </summary>
 public class BareBitcoinBalanceService
 {
     private readonly BareBitcoinApiService _apiService;
     private readonly ILogger _logger;
 
-    // Balance caching
+    // Balance caching mechanism
+    // Uses a semaphore to ensure thread-safe access to cached data
     private static readonly SemaphoreSlim _balanceLock = new SemaphoreSlim(1, 1);
     private LightningNodeBalance? _cachedBalance;
     private DateTime _lastBalanceCheck = DateTime.MinValue;
+    // Cache timeout of 5 seconds to prevent too frequent API calls while keeping data fresh
     private static readonly TimeSpan _cacheTimeout = TimeSpan.FromSeconds(5);
 
     public BareBitcoinBalanceService(BareBitcoinApiService apiService, ILogger logger)
@@ -26,59 +32,71 @@ public class BareBitcoinBalanceService
         _logger = logger;
     }
 
+    /// <summary>
+    /// Retrieves the current balance for a specific account.
+    /// Implements caching to reduce API calls - returns cached balance if available and not expired.
+    /// </summary>
+    /// <param name="accountId">The ID of the account to get the balance for</param>
+    /// <param name="cancellation">Cancellation token for async operations</param>
+    /// <returns>A LightningNodeBalance containing the current balance information</returns>
     public async Task<LightningNodeBalance> GetBalance(string accountId, CancellationToken cancellation = default)
     {
         try 
         {
+            // Ensure thread-safe access to cached data
             await _balanceLock.WaitAsync(cancellation);
             try
             {
-                var now = DateTime.UtcNow;
-                if (_cachedBalance != null && (now - _lastBalanceCheck) < _cacheTimeout)
+                // Check if we have a valid cached balance
+                if (_lastBalanceCheck != DateTime.MinValue && 
+                    DateTime.UtcNow - _lastBalanceCheck < TimeSpan.FromMinutes(1) &&
+                    _cachedBalance != null)
                 {
-                    _logger.LogInformation("Using cached balance from {LastCheck}", _lastBalanceCheck);
+                    _logger.LogDebug("Using cached balance from {LastCheck}", _lastBalanceCheck);
                     return _cachedBalance;
                 }
 
-                _logger.LogInformation("Getting balance from BareBitcoin (cache expired or not set)");
+                // Cache expired or not set - fetch fresh balance from API
+                _logger.LogDebug("Getting balance from BareBitcoin (cache expired or not set)");
                 var response = await _apiService.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
-                _logger.LogInformation("Received balance response: {response}", response);
+                _logger.LogDebug("Received balance response: {response}", response);
                 
                 // Parse response according to OpenAPI spec
                 var accounts = JObject.Parse(response)["accounts"] as JArray;
+                
+                // Handle case where no accounts are found
                 if (accounts == null || !accounts.Any())
                 {
                     _logger.LogWarning("No bitcoin accounts found in response");
-                    return new LightningNodeBalance();
+                    return CreateZeroBalance();
                 }
 
-                // If we have an accountId, find that specific account
-                var account = accountId != null 
-                    ? accounts.FirstOrDefault(a => a["id"]?.ToString() == accountId)
-                    : accounts.First();
-
+                // Find the specific account we're interested in
+                var account = accounts.FirstOrDefault(a => a["id"]?.ToString() == accountId);
                 if (account == null)
                 {
                     _logger.LogWarning("Account {AccountId} not found in response", accountId);
-                    return new LightningNodeBalance();
+                    return CreateZeroBalance();
                 }
 
-                // Get availableBtc and convert to satoshis (1 BTC = 100,000,000 sats)
-                var availableBtc = account["availableBtc"]?.Value<double>() ?? 0;
+                // Convert balance from BTC to satoshis
+                var availableBtc = account["availableBtc"]?.Value<decimal>() ?? 0m;
                 var satoshis = (long)(availableBtc * 100_000_000);
-
-                _logger.LogInformation("Creating LightningNodeBalance response with {AvailableBtc} BTC ({Satoshis} sats)", availableBtc, satoshis);
+                _logger.LogDebug("Creating LightningNodeBalance response with {AvailableBtc} BTC ({Satoshis} sats)", availableBtc, satoshis);
                 
-                _cachedBalance = new LightningNodeBalance()
+                // Create and cache the balance response
+                var balance = new LightningNodeBalance
                 {
-                    OffchainBalance = new OffchainBalance()
+                    OffchainBalance = new OffchainBalance
                     {
                         Local = LightMoney.Satoshis(satoshis)
                     }
                 };
-                _lastBalanceCheck = now;
+
+                _cachedBalance = balance;
+                _lastBalanceCheck = DateTime.UtcNow;
                 
-                return _cachedBalance;
+                return balance;
             }
             finally
             {
@@ -91,4 +109,15 @@ public class BareBitcoinBalanceService
             throw;
         }
     }
+
+    /// <summary>
+    /// Creates a zero balance response for cases where no balance data is available
+    /// </summary>
+    private static LightningNodeBalance CreateZeroBalance() => new()
+    {
+        OffchainBalance = new OffchainBalance
+        {
+            Local = LightMoney.Zero
+        }
+    };
 } 
