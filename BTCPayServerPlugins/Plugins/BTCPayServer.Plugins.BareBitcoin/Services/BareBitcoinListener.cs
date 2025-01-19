@@ -18,7 +18,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private readonly CancellationTokenSource _cts = new CancellationTokenSource();
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
-    private readonly HashSet<string> _watchedInvoices = new HashSet<string>();
+    private readonly HashSet<string> _trackedInvoices = new HashSet<string>();
     private bool _isDisposed;
 
     public bool IsDisposed => _isDisposed;
@@ -28,10 +28,12 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
-        _invoices = Channel.CreateUnbounded<LightningInvoice>(new UnboundedChannelOptions 
-        { 
+        _cts = new CancellationTokenSource();
+        _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(100)
+        {
+            SingleWriter = true,
             SingleReader = true,
-            SingleWriter = true
+            FullMode = BoundedChannelFullMode.Wait
         });
         _pollingTask = StartPolling();
     }
@@ -44,28 +46,28 @@ public class BareBitcoinListener : ILightningInvoiceListener
         {
             try
             {
-                // Get the current list of invoices to watch
+                // Get the current list of invoices to track
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
                 _logger.LogInformation("Found {Count} tracked invoices", trackedInvoices.Count);
                 
-                // Update our watch list
-                _watchedInvoices.Clear();
+                // Update our tracking list
+                _trackedInvoices.Clear();
                 foreach (var invoiceId in trackedInvoices)
                 {
-                    _logger.LogInformation("Adding/checking invoice {InvoiceId} in watch list", invoiceId);
-                    _watchedInvoices.Add(invoiceId);
+                    _logger.LogInformation("Adding invoice {InvoiceId} to tracking list", invoiceId);
+                    _trackedInvoices.Add(invoiceId);
                 }
 
-                // Check each watched invoice
-                _logger.LogInformation("Polling {Count} watched invoices for updates", _watchedInvoices.Count);
-                foreach (var invoiceId in _watchedInvoices.ToList())
+                // Check each tracked invoice
+                _logger.LogInformation("Polling {Count} tracked invoices for updates", _trackedInvoices.Count);
+                foreach (var invoiceId in _trackedInvoices.ToList())
                 {
                     var invoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
                     
                     if (invoice == null)
                     {
-                        _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from watch list", invoiceId);
-                        _watchedInvoices.Remove(invoiceId);
+                        _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
+                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                         continue;
                     }
@@ -80,13 +82,13 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         {
                             _logger.LogWarning("Failed to write paid invoice {InvoiceId} to channel", invoice.Id);
                         }
-                        _watchedInvoices.Remove(invoiceId);
+                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
-                        _logger.LogInformation("Invoice {InvoiceId} has expired, removing from watch list", invoiceId);
-                        _watchedInvoices.Remove(invoiceId);
+                        _logger.LogInformation("Invoice {InvoiceId} has expired, removing from tracking list", invoiceId);
+                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
                 }
