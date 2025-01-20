@@ -1,5 +1,13 @@
-# Blink lightning support plugin
+# Bare Bitcoin Plugin for BTCPay Server
 
-Allows to use a [Blink Wallet](https://blink.sv) account as the lightning provider for BTCPay Server.
+This plugin enables Bare Bitcoin functionality in BTCPay Server, allowing you to interact with Bitcoin in its purest form without any additional layers or complexity.
 
-Find detailed documentation on how to use this plugin at [dev.blink.sv/examples/btcpayserver-plugin](https://dev.blink.sv/examples/btcpayserver-plugin).
+## Current Limitations
+
+Currently, the plugin only supports receiving bitcoin over Lightning Network. Sending payments over Lightning Network is not yet supported.
+
+## Future Plans
+
+- Add support for sending bitcoin over Lightning Network
+
+More documentation coming soon.
