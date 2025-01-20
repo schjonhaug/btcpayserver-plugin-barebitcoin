@@ -1,9 +1,10 @@
-﻿#nullable enable
+#nullable enable
 using System;
 using System.Linq;
 using System.Net.Http;
 using BTCPayServer.Lightning;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Http;
 using Network = NBitcoin.Network;
 
 namespace BTCPayServer.Plugins.BareBitcoin;
@@ -12,11 +13,13 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
+    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IHttpContextAccessor httpContextAccessor)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
+        _httpContextAccessor = httpContextAccessor;
     }
 
 
@@ -30,18 +33,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
         }
 
         var server = "https://api.bb.no";
-
-      /*  if (!kv.TryGetValue("server", out var server))
-        {
-            server = network.Name switch
-            {
-                nameof(Network.TestNet) => "https://api.staging.galoy.io/graphql",
-                nameof(Network.RegTest) => "http://localhost:4455/graphql",
-                _ => "https://api.blink.sv/graphql"
-            };
-            // error = $"The key 'server' is mandatory for blink connection strings";
-            // return null;
-        } */
+ 
 
         if (!Uri.TryCreate(server, UriKind.Absolute, out var uri) )
         {
@@ -83,7 +75,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"));
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _httpContextAccessor);
       
 
         try

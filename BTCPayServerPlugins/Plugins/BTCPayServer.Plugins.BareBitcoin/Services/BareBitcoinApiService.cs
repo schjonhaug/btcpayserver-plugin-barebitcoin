@@ -5,6 +5,8 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Http;
+using BTCPayServer.Abstractions.Extensions;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
@@ -14,18 +16,20 @@ public class BareBitcoinApiService
     private readonly string _publicKey;
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
     // Static nonce tracking with async-compatible lock
     private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
     private static readonly SemaphoreSlim _requestLock = new SemaphoreSlim(1, 1);
     private static long _lastNonce;
 
-    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger)
+    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger, IHttpContextAccessor httpContextAccessor)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
         _httpClient = httpClient;
         _logger = logger;
+        _httpContextAccessor = httpContextAccessor;
     }
 
     private async Task<long> GetNextNonce()
@@ -83,6 +87,7 @@ public class BareBitcoinApiService
         try 
         {
             var nonce = await GetNextNonce();
+
             _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
 
             var hmac = CreateHmac(_privateKey, method, path, nonce, data);
@@ -92,6 +97,16 @@ public class BareBitcoinApiService
             request.Headers.Add("x-bb-api-hmac", hmac);
             request.Headers.Add("x-bb-api-key", _publicKey);
             request.Headers.Add("x-bb-api-nonce", nonce.ToString());
+
+            // Get store ID from current store context
+            var storeData = _httpContextAccessor.HttpContext?.GetStoreData();
+            var storeId = storeData?.Id ?? "unknown";
+            request.Headers.Add("x-bb-trace", $"{storeId}+{Guid.NewGuid()}");
+
+            foreach (var header in request.Headers)
+            {
+                _logger.LogInformation("Request header: {HeaderName}: {HeaderValue}", header.Key, header.Value);
+            }
 
             if (data != null && method != "GET")
             {

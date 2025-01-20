@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
+using Microsoft.AspNetCore.Http;
 using NBitcoin;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
@@ -28,6 +29,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private static readonly BareBitcoinInvoiceService _invoiceService;
     private static readonly object _invoiceServiceLock = new object();
     public ILogger Logger;
+    private readonly IHttpContextAccessor _httpContextAccessor;
 
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
@@ -38,7 +40,7 @@ public class BareBitcoinLightningClient : ILightningClient
         _invoiceService = new BareBitcoinInvoiceService(null!); // Logger will be set in constructor
     }
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IHttpContextAccessor httpContextAccessor)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
@@ -47,8 +49,9 @@ public class BareBitcoinLightningClient : ILightningClient
         _network = network;
         _httpClient = httpClient;
         Logger = logger;
+        _httpContextAccessor = httpContextAccessor;
         
-        _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger);
+        _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, httpContextAccessor);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
         
         // Set the logger for the invoice service
