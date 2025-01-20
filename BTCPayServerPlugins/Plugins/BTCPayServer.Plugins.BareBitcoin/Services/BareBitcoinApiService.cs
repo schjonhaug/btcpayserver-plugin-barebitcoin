@@ -105,7 +105,7 @@ public class BareBitcoinApiService
 
             foreach (var header in request.Headers)
             {
-                _logger.LogInformation("Request header: {HeaderName}: {HeaderValue}", header.Key, header.Value);
+                _logger.LogDebug("Request header: {HeaderName}: {HeaderValue}", header.Key, header.Value);
             }
 
             if (data != null && method != "GET")

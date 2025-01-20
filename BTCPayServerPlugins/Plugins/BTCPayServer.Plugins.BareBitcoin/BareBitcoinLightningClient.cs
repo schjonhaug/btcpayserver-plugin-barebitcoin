@@ -103,12 +103,6 @@ public class BareBitcoinLightningClient : ILightningClient
                 (responseObj["preimage"]?.Value<string>() ?? paymentHash) : 
                 null;
 
-            // Only remove expired invoices from tracking - paid ones will be removed after notification
-            if (status == LightningInvoiceStatus.Expired)
-            {
-                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
-            }
-
             var result = new LightningInvoice
             {
                 Id = invoiceId,
@@ -121,6 +115,17 @@ public class BareBitcoinLightningClient : ILightningClient
                 PaidAt = paidAt,
                 Preimage = preimage
             };
+
+            // Automatically track pending invoices when they are retrieved
+            if (status == LightningInvoiceStatus.Unpaid)
+            {
+                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            }
+            // Only remove expired invoices from tracking - paid ones will be removed after notification
+            else if (status == LightningInvoiceStatus.Expired)
+            {
+                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+            }
 
             Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
                 result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage);
