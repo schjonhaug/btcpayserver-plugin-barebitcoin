@@ -92,8 +92,7 @@ dotnet sln add ../barebitcoin-btcpayserver-plugin/plugin -s Plugins
 Build the plugin:
 
 ```shell
-cd plugin
-dotnet build
+dotnet build plugin
 ```
 
 Find the the absolut path of `BTCPayServer.Plugins.BareBitcoin.dll`:

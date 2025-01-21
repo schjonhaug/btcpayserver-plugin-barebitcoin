@@ -1,3 +1,0 @@
-﻿<Project>
-  <Import Project="../build/BTCPayServer.Plugins.BareBitcoin.props" />
-</Project>
