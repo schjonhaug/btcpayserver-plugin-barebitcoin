@@ -63,3 +63,53 @@ type=barebitcoin;private-key=your-secret-key;public-key=your-public-key;account-
 ```
 
 This setup process only needs to be done once when initially configuring the plugin.
+
+
+## Local development
+
+First, build BTCPay Server found in the submodule:
+
+```shell
+dotnet build submodules/btcpayserver
+```
+
+Then, in an adjacent folder to this repo, clone BTCPay Server:
+
+```shell
+git clone https://github.com/btcpayserver/btcpayserver.git
+```
+
+Then, add the plugin to the cloned BTCPay:
+
+```shell
+# Enter the forked BTCPay Server repository
+cd btcpayserver
+
+# Add your plugin to the solution
+dotnet sln add ../barebitcoin-btcpayserver-plugin/plugin -s Plugins
+```
+
+Build the plugin:
+
+```shell
+cd plugin
+dotnet build
+```
+
+Find the the absolut path of `BTCPayServer.Plugins.BareBitcoin.dll`:
+
+```shell
+find . -name "BTCPayServer.Plugins.BareBitcoin.dll"
+```
+
+Finnaly, to make sure the plugin is included in every run:
+
+```shell
+echo '{
+  "DEBUG_PLUGINS": "/Users/andreas/Developer/enogtjue/BB-plugin/barebitcoin-btcpayserver-plugin/plugin/bin/Debug/net8.0/BTCPayServer.Plugins.BareBitcoin.dll"
+}' > ../btcpayserver/appsettings.dev.json
+```
+
+Finally, also in the cloned BTCPay Server, run:
+
+```shell
