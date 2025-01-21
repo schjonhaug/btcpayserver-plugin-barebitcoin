@@ -1,0 +1,981 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Bare Bitcoin API",
+    "description": "API for interacting with Bare Bitcoin. Most endpoints require authentication. Create API keys [here](https://barebitcoin.no/innlogget/profil/nokler). Read about API authentication [here](https://dev.barebitcoin.no/).",
+    "contact": {
+      "url": "https://barebitcoin.no",
+      "email": "barebitcoin@bb.no"
+    },
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "https://api.bb.no",
+      "description": "Prod environment"
+    }
+  ],
+  "paths": {
+    "/v1/deposit-destinations/bitcoin": {
+      "get": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Fetch bitcoin deposit destinations",
+        "description": "Fetches bitcoin deposit destinations. These destinations are always valid,\n and can be used for receiving arbitrary amounts. Onchain addresses are refreshed\n every time a deposit is made, but all prior generated addresses are still valid.",
+        "operationId": "BitcoinTransferService_DepositDestinations",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "query",
+            "description": "If empty, the default account is used.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DepositDestinationsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/deposit-destinations/bitcoin/invoice": {
+      "post": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Create a new Lightning invoice",
+        "description": "Creates a new BOLT11 Lightning invoice. Lightning invoices are requests to receive a specific\n amount of bitcoin within a set amount of time. If you don't a specific amount, consider\n using the destinations returned from /v1/deposit-destinations/bitcoin.",
+        "operationId": "BitcoinTransferService_NewLightningInvoice",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewLightningInvoiceRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewLightningInvoiceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/deposit-destinations/bitcoin/invoice/{id}": {
+      "get": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Fetch a Lightning invoice",
+        "description": "Fetches a Lightning invoice.",
+        "operationId": "BitcoinTransferService_GetLightningInvoice",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Can be:\n 1. Deposit destination ID. Prefix: `ded_`.\n 2. The Lightning invoice itself.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetLightningInvoiceResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger": {
+      "get": {
+        "tags": [
+          "LedgerService"
+        ],
+        "summary": "Fetch ledger",
+        "description": "Fetches the ledger for the entire user. The ledger includes all transactions\n that affect the balance of the account.",
+        "operationId": "LedgerService_LedgerUser",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerUserResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/ledger/{accountId}": {
+      "get": {
+        "tags": [
+          "LedgerService"
+        ],
+        "summary": "Fetch sub account ledger",
+        "description": "Fetches the ledger for a specific account. The ledger includes all\n transactions that affect the balance of the account.",
+        "operationId": "LedgerService_LedgerAccount",
+        "parameters": [
+          {
+            "name": "accountId",
+            "in": "path",
+            "description": "The ID of the account to fetch the ledger for.",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LedgerAccountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orders": {
+      "get": {
+        "tags": [
+          "TradingService"
+        ],
+        "summary": "Fetch open orders",
+        "description": "Fetches all open orders for the user. Open orders are orders that are\n not yet filled, and can be cancelled.",
+        "operationId": "TradingService_OpenOrders",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OpenOrdersResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "TradingService"
+        ],
+        "summary": "Place a new order",
+        "description": "Places a new order. If the endpoint returns with a 200 status, the order\n is successfully placed. If you're creating a market order, a trade is\n also created, and its ID is included in the response.",
+        "operationId": "TradingService_NewOrder",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NewOrderRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NewOrderResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/orders/{orderId}": {
+      "delete": {
+        "tags": [
+          "TradingService"
+        ],
+        "summary": "Cancel an order",
+        "description": "Cancel a pending order. If the order is already filled, an error will\n be returned. It is not possible to cancel market orders.",
+        "operationId": "TradingService_CancelOrder",
+        "parameters": [
+          {
+            "name": "orderId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {}
+          }
+        }
+      }
+    },
+    "/v1/price/nok": {
+      "get": {
+        "tags": [
+          "PublicService"
+        ],
+        "summary": "Fetch BTCNOK",
+        "description": "Fetches the current BTCNOK price.",
+        "operationId": "PublicService_Price",
+        "parameters": [
+          {
+            "name": "amount",
+            "in": "query",
+            "description": "Amount NOK to trade for. If empty, defaults to 5000 NOK.",
+            "schema": {
+              "type": "number",
+              "format": "double"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PriceResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/v1/user/bitcoin-accounts": {
+      "get": {
+        "tags": [
+          "UserService"
+        ],
+        "summary": "Fetch bitcoin sub accounts",
+        "description": "Lists the bitcoin accounts for the user. Each bitcoin account has a\n separate balance. Every bitcoin transaction (withdrawal, deposit, trade,\n bonus payout) affects the balance of exactly one bitcoin account.",
+        "operationId": "UserService_ListBitcoinAccounts",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListBitcoinAccountsResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/user/fiat-account": {
+      "get": {
+        "tags": [
+          "UserService"
+        ],
+        "summary": "Fetch user fiat information",
+        "description": "Fetches the fiat account. The fiat account for a user holds their NOK\n balance. Every user has exactly one fiat account. Sub-accounts for a user\n only pertains to bitcoin holdings.",
+        "operationId": "UserService_GetFiatAccount",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetFiatAccountResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/volume": {
+      "get": {
+        "tags": [
+          "PublicService"
+        ],
+        "summary": "Fetch volume statistics",
+        "description": "Returns statistics about the volume of BTCNOK trades.",
+        "operationId": "PublicService_Volume",
+        "parameters": [
+          {
+            "name": "date",
+            "in": "query",
+            "description": "The date to fetch the volume for. If empty, defaults to today.\n Format: YYYY-MM-DD",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VolumeResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {}
+        ]
+      }
+    },
+    "/v1/withdrawals/bitcoin": {
+      "post": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Initiate withdrawal",
+        "description": "Initiates a bitcoin withdrawal. The transaction is not completed until\n it is confirmed by the network it is sent onto. A success response from\n this endpoint means the transaction was successfully initiated, but\n does not guarantee completion.",
+        "operationId": "BitcoinTransferService_SendBitcoin",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SendBitcoinRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SendBitcoinResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/withdrawals/bitcoin/{withdrawalId}": {
+      "get": {
+        "tags": [
+          "BitcoinTransferService"
+        ],
+        "summary": "Fetch withdrawal",
+        "description": "Fetches a bitcoin withdrawal.",
+        "operationId": "BitcoinTransferService_GetBitcoinWithdrawal",
+        "parameters": [
+          {
+            "name": "withdrawalId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetBitcoinWithdrawalResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "BitcoinAccount": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "availableBtc": {
+            "type": "number",
+            "description": "The current BTC holdings that can be used for trading or withdrawals.",
+            "format": "double"
+          },
+          "pendingOrdersBtc": {
+            "type": "number",
+            "description": "The current BTC holdings that are tied up in pending orders.",
+            "format": "double"
+          }
+        }
+      },
+      "DepositDestination": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string"
+          },
+          "network": {
+            "enum": [
+              "NETWORK_UNSPECIFIED",
+              "NETWORK_BITCOIN",
+              "NETWORK_LIGHTNING"
+            ],
+            "type": "string",
+            "format": "enum"
+          }
+        }
+      },
+      "DepositDestinationsResponse": {
+        "type": "object",
+        "properties": {
+          "onchainAddress": {
+            "$ref": "#/components/schemas/DepositDestination"
+          },
+          "lightningAddress": {
+            "$ref": "#/components/schemas/DepositDestination"
+          },
+          "lnurlPay": {
+            "$ref": "#/components/schemas/DepositDestination"
+          }
+        }
+      },
+      "GetBitcoinWithdrawalResponse": {
+        "type": "object",
+        "properties": {
+          "withdrawalId": {
+            "type": "string"
+          },
+          "destination": {
+            "type": "string",
+            "description": "The destination of the withdrawal."
+          },
+          "network": {
+            "enum": [
+              "NETWORK_UNSPECIFIED",
+              "NETWORK_BITCOIN",
+              "NETWORK_LIGHTNING"
+            ],
+            "type": "string",
+            "description": "The network this withdrawal was sent on.",
+            "format": "enum"
+          },
+          "amountBtc": {
+            "type": "number",
+            "description": "The amount of BTC that was withdrawn.",
+            "format": "double"
+          },
+          "amountNok": {
+            "type": "number",
+            "description": "The value of the BTC that was withdrawn, in NOK equivalent\n at time of withdrawal.",
+            "format": "double"
+          },
+          "status": {
+            "enum": [
+              "WITHDRAWAL_STATUS_UNSPECIFIED",
+              "WITHDRAWAL_STATUS_PENDING",
+              "WITHDRAWAL_STATUS_COMPLETED",
+              "WITHDRAWAL_STATUS_FAILED"
+            ],
+            "type": "string",
+            "description": "The status of the withdrawal.",
+            "format": "enum"
+          },
+          "createdAt": {
+            "type": "string",
+            "description": "The time the withdrawal was initiated.",
+            "format": "date-time"
+          },
+          "sentAt": {
+            "type": "string",
+            "description": "The time the withdrawal was sent from the platform.",
+            "format": "date-time"
+          }
+        }
+      },
+      "GetFiatAccountResponse": {
+        "type": "object",
+        "properties": {
+          "availableNok": {
+            "type": "number",
+            "description": "The current NOK holdings that can be used for trading or\n withdrawals.",
+            "format": "double"
+          },
+          "pendingOrdersNok": {
+            "type": "number",
+            "description": "The current NOK holdings that are tied up in pending orders.",
+            "format": "double"
+          }
+        }
+      },
+      "GetLightningInvoiceResponse": {
+        "type": "object",
+        "properties": {
+          "depositDestinationId": {
+            "type": "string"
+          },
+          "invoice": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "INVOICE_STATUS_UNSPECIFIED",
+              "INVOICE_STATUS_UNPAID",
+              "INVOICE_STATUS_PENDING",
+              "INVOICE_STATUS_PAID",
+              "INVOICE_STATUS_EXPIRED",
+              "INVOICE_STATUS_CANCELED"
+            ],
+            "type": "string",
+            "format": "enum"
+          }
+        }
+      },
+      "LedgerAccountResponse": {
+        "type": "object",
+        "properties": {}
+      },
+      "LedgerEntry": {
+        "type": "object",
+        "properties": {
+          "transactionId": {
+            "type": "string",
+            "description": "The ID of the transaction that resulted in this ledger entry."
+          },
+          "type": {
+            "enum": [
+              "ENTRY_TYPE_UNSPECIFIED",
+              "ENTRY_TYPE_WITHDRAWAL",
+              "ENTRY_TYPE_DEPOSIT",
+              "ENTRY_TYPE_TRADE",
+              "ENTRY_TYPE_TRANSFER",
+              "ENTRY_TYPE_REWARD"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "currency": {
+            "enum": [
+              "CURRENCY_UNSPECIFIED",
+              "CURRENCY_BTC",
+              "CURRENCY_NOK"
+            ],
+            "type": "string",
+            "description": "The currency of the ledger entry. Both the value and the balance are in",
+            "format": "enum"
+          },
+          "value": {
+            "type": "number",
+            "description": "The value of the ledger entry. Negative indicates balance decrease, positive\n indicates balance increase. The fee is included in this value.",
+            "format": "double"
+          },
+          "fee": {
+            "type": "number",
+            "description": "The fee associated with the ledger entry.",
+            "format": "double"
+          },
+          "balance": {
+            "type": "number",
+            "description": "The balance after the transaction.",
+            "format": "double"
+          }
+        },
+        "description": "TODO: investigate how other platforms do this.\n\n Kraken: https://docs.kraken.com/api/docs/rest-api/get-ledgers\n\n Been told Kraken is good!\n\n A ledger entry is a balance-affecting transaction. One action\n on the platform can result in multiple ledger entries. For example, a\n trade results in distinct BTC and NOK ledger entries."
+      },
+      "LedgerUserResponse": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LedgerEntry"
+            }
+          }
+        }
+      },
+      "ListBitcoinAccountsResponse": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BitcoinAccount"
+            }
+          }
+        }
+      },
+      "NewLightningInvoiceRequest": {
+        "type": "object",
+        "properties": {
+          "accountId": {
+            "type": "string",
+            "description": "if empty, the default account is used."
+          },
+          "currency": {
+            "enum": [
+              "CURRENCY_UNSPECIFIED",
+              "CURRENCY_BTC",
+              "CURRENCY_NOK"
+            ],
+            "type": "string",
+            "description": "The currency the invoice is denominated in. Once created, the invoice\n is for a specific amount of bitcoin.",
+            "format": "enum"
+          },
+          "amount": {
+            "type": "number",
+            "description": "The amount of the invoice, in the requested currency.",
+            "format": "double"
+          },
+          "publicDescription": {
+            "type": "string",
+            "description": "Public description of the invoice. Shown to both the creator and the\n recipient of the invoice. This is the so-called \"memo\" field of the\n Lightning invoice."
+          },
+          "internalDescription": {
+            "type": "string",
+            "description": "Free-form text description of the invoice. Can be used to correlate with\n your own systems. Only shown to the creator of this invoice, within the\n Bare Bitcoin systems."
+          }
+        }
+      },
+      "NewLightningInvoiceResponse": {
+        "type": "object",
+        "properties": {
+          "depositDestinationId": {
+            "type": "string"
+          },
+          "invoice": {
+            "type": "string"
+          }
+        }
+      },
+      "NewOrderRequest": {
+        "type": "object",
+        "properties": {
+          "type": {
+            "enum": [
+              "ORDER_TYPE_UNSPECIFIED",
+              "ORDER_TYPE_MARKET",
+              "ORDER_TYPE_LIMIT"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "direction": {
+            "enum": [
+              "DIRECTION_UNSPECIFIED",
+              "DIRECTION_BUY",
+              "DIRECTION_SELL"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "amount": {
+            "type": "number",
+            "description": "Amount to spend. Must be positive. When buying, this is the amount in NOK.\n When selling, this is the amount in BTC.",
+            "format": "double"
+          },
+          "accountId": {
+            "type": "string",
+            "description": "The bitcoin account to use for this order. Empty for default account."
+          },
+          "description": {
+            "type": "string",
+            "description": "Free-form text description of the order. Can be used to correlate with\n your own systems."
+          },
+          "price": {
+            "type": "number",
+            "description": "The price to buy or sell at. Only used for limit orders.",
+            "format": "double"
+          }
+        }
+      },
+      "NewOrderResponse": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string",
+            "description": "ID of the created order."
+          },
+          "tradeId": {
+            "type": "string",
+            "description": "If this was a market order, the order resulted in a trade. Empty if not\n market order."
+          }
+        }
+      },
+      "OpenOrdersResponse": {
+        "type": "object",
+        "properties": {
+          "orders": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Order"
+            }
+          }
+        }
+      },
+      "Order": {
+        "type": "object",
+        "properties": {
+          "orderId": {
+            "type": "string"
+          },
+          "type": {
+            "enum": [
+              "ORDER_TYPE_UNSPECIFIED",
+              "ORDER_TYPE_MARKET",
+              "ORDER_TYPE_LIMIT"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "direction": {
+            "enum": [
+              "DIRECTION_UNSPECIFIED",
+              "DIRECTION_BUY",
+              "DIRECTION_SELL"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "amount": {
+            "type": "number",
+            "format": "double"
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "PriceResponse": {
+        "type": "object",
+        "properties": {
+          "price": {
+            "type": "number",
+            "description": "The mid price.",
+            "format": "double"
+          },
+          "bid": {
+            "type": "number",
+            "description": "Current bid price, without fees.",
+            "format": "double"
+          },
+          "ask": {
+            "type": "number",
+            "description": "Current ask price, without fees.",
+            "format": "double"
+          },
+          "timestamp": {
+            "type": "string",
+            "description": "The time the price was fetched.",
+            "format": "date-time"
+          },
+          "card": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              }
+            ],
+            "description": "Effective price, when paying with card."
+          },
+          "bank": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/UserPrice"
+              }
+            ],
+            "description": "Effective price, when paying with bank transfer."
+          }
+        }
+      },
+      "SendBitcoinRequest": {
+        "type": "object",
+        "properties": {
+          "destination": {
+            "type": "string",
+            "description": "The bitcoin destination to send funds to.\n Supported formats:\n - Bitcoin address (bech32, legacy-segwit, legacy)\n - Lightning invoice (bolt11)\n - Lightning address\n - Lightning LNURL"
+          },
+          "amountBtc": {
+            "type": "number",
+            "description": "The amount to send.\n This field is required for all destinations except Lightning invoices.\n If the destination is a Lightning invoice, the amount is derived from the\n invoice.",
+            "format": "double"
+          },
+          "accountId": {
+            "type": "string",
+            "description": "The ID of the account to send from. If empty, the default account is used."
+          },
+          "isPayment": {
+            "type": "boolean",
+            "description": "Marks the transaction as a payment. This has consequences for how the\n transaction is exported for tax purposes. It has no effect on the\n bitcoin transaction itself."
+          },
+          "description": {
+            "type": "string",
+            "description": "Free-form text description of the withdrawal. Can be used to correlate with\n your own systems."
+          }
+        }
+      },
+      "SendBitcoinResponse": {
+        "type": "object",
+        "properties": {
+          "withdrawalId": {
+            "type": "string",
+            "description": "The ID of the initiated withdrawal."
+          },
+          "network": {
+            "enum": [
+              "NETWORK_UNSPECIFIED",
+              "NETWORK_BITCOIN",
+              "NETWORK_LIGHTNING"
+            ],
+            "type": "string",
+            "format": "enum"
+          },
+          "status": {
+            "enum": [
+              "WITHDRAWAL_STATUS_UNSPECIFIED",
+              "WITHDRAWAL_STATUS_PENDING",
+              "WITHDRAWAL_STATUS_COMPLETED",
+              "WITHDRAWAL_STATUS_FAILED"
+            ],
+            "type": "string",
+            "description": "The status of the withdrawal. The withdrawal might immediately succeed,\n if sending to another user of the Bare Bitcoin platform.",
+            "format": "enum"
+          }
+        }
+      },
+      "UserPrice": {
+        "type": "object",
+        "properties": {
+          "buy": {
+            "type": "number",
+            "format": "double"
+          },
+          "sell": {
+            "type": "number",
+            "format": "double"
+          }
+        },
+        "description": "The prices a user can expect to pay for a given amount of BTCNOK,\n with a given payment method."
+      },
+      "VolumeResponse": {
+        "type": "object",
+        "properties": {
+          "daily": {
+            "$ref": "#/components/schemas/VolumeStats"
+          },
+          "monthly": {
+            "$ref": "#/components/schemas/VolumeStats"
+          },
+          "yearly": {
+            "$ref": "#/components/schemas/VolumeStats"
+          }
+        }
+      },
+      "VolumeStats": {
+        "type": "object",
+        "properties": {
+          "amountNok": {
+            "type": "number",
+            "format": "double"
+          },
+          "amountBtc": {
+            "type": "number",
+            "format": "double"
+          },
+          "buyPercentage": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "apiKey": {
+        "type": "apiKey",
+        "description": "Public part of your API key. Starts with `bb/public/`.",
+        "name": "x-bb-api-key",
+        "in": "header"
+      },
+      "apiNonce": {
+        "type": "apiKey",
+        "description": "Nonce value. Used to ensure correct ordering of all API requests, as well as prevent attackers from being able to replay old requests. Can be set to any value, but needs to increase for each request. Recommendation is to use the current Unix timestamp in milliseconds.",
+        "name": "x-bb-api-nonce",
+        "in": "header"
+      },
+      "apiHmac": {
+        "type": "apiKey",
+        "description": "HMAC authentication for the API request, constructed using the corresponding secret value from your API key.",
+        "name": "x-bb-api-hmac",
+        "in": "header"
+      }
+    }
+  },
+  "security": [
+    {
+      "apiKey": [],
+      "apiHmac": [],
+      "apiNonce": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "BitcoinTransferService",
+      "description": "Transfer bitcoin in and out of the platform. Fetch information about past\n bitcoin transfers."
+    },
+    {
+      "name": "LedgerService"
+    },
+    {
+      "name": "PublicService",
+      "description": "Public endpoints that don't require authentication"
+    },
+    {
+      "name": "TradingService",
+      "description": "Execute and cancel orders. Fetch information about past orders."
+    },
+    {
+      "name": "UserService",
+      "description": "Fetch information the authenticated user and it sub accounts."
+    }
+  ]
+}
