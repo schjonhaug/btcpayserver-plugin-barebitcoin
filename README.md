@@ -106,7 +106,7 @@ Finnaly, to make sure the plugin is included in every run:
 ```shell
 echo '{
   "DEBUG_PLUGINS": "/Users/andreas/Developer/enogtjue/BB-plugin/barebitcoin-btcpayserver-plugin/plugin/bin/Debug/net8.0/BTCPayServer.Plugins.BareBitcoin.dll"
-}' > ../btcpayserver/appsettings.dev.json
+}' > ../btcpayserver/BTCPayServer/appsettings.dev.json
 ```
 
 Finally, also in the cloned BTCPay Server, run:
