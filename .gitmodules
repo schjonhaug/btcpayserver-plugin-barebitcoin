@@ -1,3 +1,0 @@
-[submodule "btcpayserver"]
-	path = btcpayserver
-	url = git@github.com:btcpayserver/btcpayserver.git
