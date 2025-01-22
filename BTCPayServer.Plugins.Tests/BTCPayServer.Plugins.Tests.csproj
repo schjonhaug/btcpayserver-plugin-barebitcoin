@@ -17,9 +17,5 @@
         </PackageReference>
     </ItemGroup>
 
-    <ItemGroup>
-      <ProjectReference Include="..\Plugins\BTCPayServer.Plugins.Wabisabi\BTCPayServer.Plugins.Wabisabi.csproj" />
-      <ProjectReference Include="..\submodules\walletwasabi\WalletWasabi\WalletWasabi.csproj" />
-    </ItemGroup>
 
 </Project>
