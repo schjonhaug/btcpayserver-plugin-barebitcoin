@@ -16,3 +16,6 @@ dotnet publish -c Release -o "tmp/publish"
 mkdir -p tmp/out
 cp tmp/publish-package/*/*/* tmp/out
 rm tmp/out/SHA256SUMS.asc tmp/out/SHA256SUMS
+
+echo "Plugin file ready at: $pluginDir/tmp/out/"
+echo "Upload the .btcpay file from this directory to BTCPay Server's plugin section"
