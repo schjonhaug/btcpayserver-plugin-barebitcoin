@@ -11,28 +11,34 @@
     document.addEventListener("DOMContentLoaded", function () {
        
        const customNodeAccordian = document.getElementById("CustomNodeSupport");
-       const template = document.getElementById("blink");
+       const template = document.getElementById("barebitcoin");
        customNodeAccordian.appendChild(template.content.cloneNode(true));
         
     });
 </script>
-
-<template id="blink">
+<template id="barebitcoin">
     <div class="accordion-item">
-        <h2 class="accordion-header" id="CustomBlinkHeader">
-            <button type="button" class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#CustomBlinkContent" aria-controls="CustomBlinkContent" aria-expanded="false">
+        <h2 class="accordion-header" id="CustomBareBitcoinHeader">
+            <button type="button" class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#CustomBareBitcoinContent" aria-controls="CustomBareBitcoinContent" aria-expanded="false">
                 <span><strong>Bare Bitcoin</strong> via REST API</span>
                 <vc:icon symbol="caret-down"/>
             </button>
         </h2>
-        <div id="CustomBlinkContent" class="accordion-collapse collapse" aria-labelledby="CustomBlinkHeader" data-bs-parent="#CustomNodeSupport">
+        <div id="CustomBareBitcoinContent" class="accordion-collapse collapse" aria-labelledby="CustomBareBitcoinHeader" data-bs-parent="#CustomNodeSupport">
             <div class="accordion-body">
                 <ul class="pb-2">
                     <li>
-                        <code><b>type=</b>blink;<b>server=</b>https://api.blink.sv/graphql;<b>api-key</b>=blink_...;<b>wallet-id=</b>xyz</code>
+                        <code><b>type=</b>barebitcoin;<b>private-key=</b>your-secret-key;<b>public-key=</b>your-public-key;<b>account-id=</b>selected-account-id</code>
                     </li>
                 </ul>
-                <p class="my-2">Head over to the <a href="https://dashboard.blink.sv" target="_blank" rel="noreferrer noopener" >Blink dashboard</a> and create an api key. The server is optional and will use the default Blink instance.The wallet-id is optional and will use the default wallet otherwise.</p>
+                <p class="my-2">Head over to <a href="https://barebitcoin.no/innlogget/profil/nokler/opprett" target="_blank" rel="noreferrer noopener">Bare Bitcoin API Key Creation</a> to create your API keys. You'll need to:</p>
+                <ol class="my-2">
+                    <li>Create API keys with both Read and Write permissions</li>
+                    <li>Add IP whitelist: 170.75.160.202</li>
+                    <li>Save your public and private keys securely</li>
+                    <li>Run the provided setup script to select your Bitcoin account and generate the connection string</li>
+                </ol>
+                <p class="my-2">For detailed setup instructions, please refer to our <a href="https://github.com/barebitcoin/btcpayserver-plugin" target="_blank" rel="noreferrer noopener">documentation</a>.</p>
             </div>
         </div>
     </div>
