@@ -1,14 +1,17 @@
 #!/bin/zsh
 
-# Check if both arguments are provided
-if [ $# -lt 2 ]; then
-    echo "Error: Missing required arguments" >&2
-    echo "Usage: $0 <public_key> <secret_key>" >&2
+# Remove argument check and replace with prompts
+echo "Please enter your public key:"
+read public_key
+
+echo "Please enter your secret key:"
+read secret_key
+
+# Validate inputs
+if [ -z "$public_key" ] || [ -z "$secret_key" ]; then
+    echo "Error: Both public key and secret key are required" >&2
     exit 1
 fi
-
-public_key="$1"
-secret_key="$2"
 
 # Set up request components
 method="GET"
@@ -26,25 +29,41 @@ message_with_hash=$(/usr/bin/printf "%s%s" "$message" "$nonce_hash")
 secret_decoded=$(/usr/bin/printf "%s" "$secret_key" | /usr/bin/base64 -d)
 hmac=$(/usr/bin/printf "%s" "$message_with_hash" | /opt/homebrew/bin/openssl dgst -sha256 -binary -mac HMAC -macopt key:"$secret_decoded" | /usr/bin/base64)
 
-# Execute the curl command and store the response
-response=$(/usr/bin/curl -s -X GET \
+# Execute the curl command and store the response, including HTTP status code
+response=$(/usr/bin/curl -s -w "\n%{http_code}" -X GET \
   https://api.bb.no/v1/user/bitcoin-accounts \
   -H "x-bb-api-hmac: $hmac" \
   -H "x-bb-api-key: $public_key" \
   -H "x-bb-api-nonce: $nonce")
 
+# Split response into body and status code
+body=$(echo "$response" | /usr/bin/sed '$d')
+status_code=$(echo "$response" | /usr/bin/tail -n1)
+
+# Check status code
+if [ "$status_code" != "200" ]; then
+    echo "Error: API request failed with status code $status_code"
+    echo "Response body:"
+    echo "$body" | /usr/bin/jq '.'
+    exit 1
+fi
+
+# Debug: Print raw JSON response
+echo "Raw API Response:"
+echo "$body" | /usr/bin/jq '.'
+
 # Extract and display accounts with numbers
-echo "Available accounts:"
+echo "\nAvailable accounts:"
 declare -A accounts
 i=1
 while IFS= read -r id; do
     if [ ! -z "$id" ]; then
         accounts[$i]=$id
-        balance=$(/usr/bin/printf "%s" "$response" | /usr/bin/jq -r ".accounts[] | select(.id == \"$id\") | .availableBtc")
+        balance=$(/usr/bin/printf "%s" "$body" | /usr/bin/jq -r ".accounts[] | select(.id == \"$id\") | .availableBtc")
         echo "$i) $id (Balance: $balance BTC)"
         ((i++))
     fi
-done < <(/usr/bin/printf "%s" "$response" | /usr/bin/jq -r '.accounts[].id')
+done < <(/usr/bin/printf "%s" "$body" | /usr/bin/jq -r '.accounts[].id')
 
 # Prompt for account selection
 echo "\nSelect account number (1-$((i-1))):"
