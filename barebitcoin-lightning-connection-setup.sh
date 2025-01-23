@@ -48,10 +48,6 @@ if [ "$status_code" != "200" ]; then
     exit 1
 fi
 
-# Debug: Print raw JSON response
-echo "Raw API Response:"
-echo "$body" | /usr/bin/jq '.'
-
 # Extract and display accounts with numbers
 echo "\nAvailable accounts:"
 declare -A accounts
@@ -65,18 +61,24 @@ while IFS= read -r id; do
     fi
 done < <(/usr/bin/printf "%s" "$body" | /usr/bin/jq -r '.accounts[].id')
 
-# Prompt for account selection
-echo "\nSelect account number (1-$((i-1))):"
-read account_num
+# If only one account, select it automatically
+if [ $((i-1)) -eq 1 ]; then
+    account_num=1
+    selected_account=${accounts[$account_num]}
+else
+    # Prompt for account selection
+    echo "\nSelect account number (1-$((i-1))):"
+    read account_num
 
-# Validate input
-if [[ ! "$account_num" =~ ^[0-9]+$ ]] || [ "$account_num" -lt 1 ] || [ "$account_num" -gt $((i-1)) ]; then
-    echo "Invalid selection" >&2
-    exit 1
+    # Validate input
+    if [[ ! "$account_num" =~ ^[0-9]+$ ]] || [ "$account_num" -lt 1 ] || [ "$account_num" -gt $((i-1)) ]; then
+        echo "Invalid selection" >&2
+        exit 1
+    fi
+
+    # Get selected account ID
+    selected_account=${accounts[$account_num]}
 fi
-
-# Get selected account ID
-selected_account=${accounts[$account_num]}
 
 # Output the final string with heading
 echo "\nConnection configuration for your custom Lightning node:\n"
