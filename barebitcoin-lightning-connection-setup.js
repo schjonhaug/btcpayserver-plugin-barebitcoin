@@ -121,13 +121,13 @@ async function main() {
     console.error("Error: No accounts found in the response.");
     process.exit(1);
   }
-
   console.log("\nAvailable accounts:");
   // Build an array of account IDs for selection
   const accounts = data.accounts;
   accounts.forEach((acct, index) => {
+    const balance = Number(acct.availableBtc) === 0 ? "0" : Number(acct.availableBtc).toFixed(8);
     console.log(
-      `${index + 1}) ${acct.id} (Balance: ${acct.availableBtc} BTC)`
+      `${index + 1}) ${acct.id} (Balance: ${balance} BTC)`
     );
   });
 
