@@ -58,7 +58,7 @@ public class BareBitcoinBalanceService
 
                 // Cache expired or not set - fetch fresh balance from API
                 _logger.LogDebug("Getting balance from BareBitcoin (cache expired or not set)");
-                var response = await _apiService.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts");
+                var response = await _apiService.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts", useSimpleAuth: true);
                 _logger.LogDebug("Received balance response: {response}", response);
                 
                 // Parse response according to OpenAPI spec

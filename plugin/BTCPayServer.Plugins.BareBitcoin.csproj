@@ -9,7 +9,7 @@
     <PropertyGroup>
         <Product>Bare Bitcoin</Product>
         <Description>Bare Bitcoin Lightning support</Description>
-        <Version>1.0.0</Version>
+        <Version>1.1.0</Version>
 <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
         <RootNamespace>BTCPayServer.Plugins.BareBitcoin</RootNamespace>
     </PropertyGroup>
