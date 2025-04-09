@@ -100,3 +100,10 @@ echo '{
 Finally, also in the cloned BTCPay Server, run:
 
 ```shell
+cd btcpayserver/BTCPayServer.Tests
+docker-compose up dev
+```
+
+Then, start the BTCPay Server using for example VSCode (.NET Core Launch (web))
+
+Finally, navigate to https://localhost:14142
