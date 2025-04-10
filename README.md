@@ -107,3 +107,11 @@ docker-compose up dev
 Then, start the BTCPay Server using for example VSCode (.NET Core Launch (web))
 
 Finally, navigate to https://localhost:14142
+
+## Compilation of binaries
+
+```shell
+./pluginpacker.sh
+```
+
+This creates a file in `plugin/tmp/out/BTCPayServer.Plugins.BareBitcoin.btcpay` which then should be uploaded to BTCPay in the plugins section.
