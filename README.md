@@ -19,8 +19,7 @@ To use the BareBitcoin API, you need to create API keys:
 1. Navigate to [BareBitcoin API Key Creation](https://barebitcoin.no/innlogget/profil/nokler/opprett)
 2. Fill in the following details:
    - Name: Give your API key a descriptive name (e.g., "Enogtjue")
-   - IP Whitelist: 170.75.160.202
-   - Permissions: Select both Read and Write permissions
+   - Permissions: Select both Read and Receive permissions
 
 3. After creation, you'll receive:
    - Public Key
