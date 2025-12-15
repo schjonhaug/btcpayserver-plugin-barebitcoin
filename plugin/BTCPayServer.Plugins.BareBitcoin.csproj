@@ -12,7 +12,7 @@
         <Version>1.1.0</Version>
         <Authors>Andreas Schjønhaug</Authors>
         <Company>Enogtjue</Company>
-        <RepositoryUrl>https://github.com/schjonhaug/barebitcoin-btcpayserver-plugin</RepositoryUrl>
+        <RepositoryUrl>https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin</RepositoryUrl>
         <RepositoryType>git</RepositoryType>
         <CopyLocalLockFileAssemblies>true</CopyLocalLockFileAssemblies>
         <RootNamespace>BTCPayServer.Plugins.BareBitcoin</RootNamespace>
