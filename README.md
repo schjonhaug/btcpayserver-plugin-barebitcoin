@@ -1,116 +1,100 @@
 # Bare Bitcoin Plugin for BTCPay Server
 
-This plugin enables Bare Bitcoin functionality in BTCPay Server, allowing you to interact with Bitcoin in its purest form without any additional layers or complexity.
+Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server. This plugin allows you to receive Lightning payments directly to your Bare Bitcoin account and view your current balance.
 
-## Current Limitations
+## Features
 
-Currently, the plugin only supports receiving bitcoin over Lightning Network. Sending payments over Lightning Network is not yet supported.
+- **Receive Lightning payments** — Accept bitcoin payments over Lightning Network directly to your Bare Bitcoin account
+- **Balance display** — View your current Bare Bitcoin balance within BTCPay Server
 
-## Future Plans
+## Limitations
 
-- Add support for sending bitcoin over Lightning Network
+Sending payments over Lightning Network is not yet supported.
 
-## First Time Setup
+## Installation
 
-### 1. API Key Creation
+1. In BTCPay Server, go to **Server Settings > Plugins**
+2. Search for "Bare Bitcoin"
+3. Click **Install**
+4. Restart BTCPay Server when prompted
 
-To use the BareBitcoin API, you need to create API keys:
+## Setup
 
-1. Navigate to [BareBitcoin API Key Creation](https://barebitcoin.no/innlogget/profil/nokler/opprett)
-2. Fill in the following details:
-   - Name: Give your API key a descriptive name (e.g., "Enogtjue")
-   - Permissions: Select both Read and Receive permissions
+### 1. Create API Keys
 
-3. After creation, you'll receive:
-   - Public Key
-   - Secret Key
+1. Log in to your Bare Bitcoin account
+2. Navigate to [API Key Creation](https://barebitcoin.no/innlogget/profil/nokler/opprett)
+3. Create a new key with:
+   - **Name:** A descriptive name (e.g., "BTCPay Server")
+   - **Permissions:** Select both **Read** and **Receive**
+4. Save your Public Key and Secret Key securely — the secret key is only shown once
 
-Make sure to securely store these credentials as the secret key will only be shown once.
+### 2. Generate Connection String
 
-### 2. Lightning Connection Setup
+Use the provided script to generate your BTCPay Server connection string:
 
-After obtaining your API keys, use the provided `barebitcoin-lightning-connection-setup.js` script to select your Bitcoin account and generate the connection configuration:
-
-1. Make sure you have Node.js installed on your system
-
-2. Run the script with Node.js:
+1. Ensure [Node.js](https://nodejs.org) is installed
+2. Run:
    ```shell
    node barebitcoin-lightning-connection-setup.js
    ```
+3. Enter your Public Key and Secret Key when prompted
+4. Select which Bitcoin account to use (if you have multiple)
+5. Copy the generated connection string
 
-3. When prompted, enter your:
-   - Public key
-   - Secret key
+### 3. Configure BTCPay Server
 
-4. The script will:
-   - List all your available Bitcoin accounts with their balances
-   - Let you select which account to use (if you have multiple accounts)
-   - Generate the connection configuration string needed for BTCPay Server
+1. In BTCPay Server, go to your store's **Lightning** settings
+2. Select **Bare Bitcoin** as the Lightning connection type
+3. Paste your connection string
+4. Save
 
-5. Copy the generated configuration string - you'll need this to complete the setup in BTCPay Server.
+## Development
 
-Example output:
+### Prerequisites
 
-
-## Local development
-
-First, build BTCPay Server found in the submodule:
-
-```shell
-dotnet build submodules/btcpayserver
-```
-
-Then, in an adjacent folder to this repo, clone BTCPay Server:
+Clone BTCPay Server adjacent to this repository:
 
 ```shell
 git clone https://github.com/btcpayserver/btcpayserver.git
 ```
 
-Then, add the plugin to the cloned BTCPay:
+### Build
+
+Build the BTCPay Server submodule:
 
 ```shell
-# Enter the forked BTCPay Server repository
-cd btcpayserver
+dotnet build submodules/btcpayserver
+```
 
-# Add your plugin to the solution
+Add the plugin to the BTCPay Server solution:
+
+```shell
+cd btcpayserver
 dotnet sln add ../barebitcoin-btcpayserver-plugin/plugin -s Plugins
 ```
 
 Build the plugin:
 
 ```shell
-dotnet build plugin
+dotnet build ../barebitcoin-btcpayserver-plugin/plugin
 ```
 
-Find the the absolut path of `BTCPayServer.Plugins.BareBitcoin.dll`:
+### Run Locally
 
-```shell
-find . -name "BTCPayServer.Plugins.BareBitcoin.dll"
-```
-
-Finnaly, to make sure the plugin is included in every run:
+Configure BTCPay Server to load the plugin:
 
 ```shell
 echo '{
-  "DEBUG_PLUGINS": "/Users/andreas/Developer/enogtjue/BB-plugin/barebitcoin-btcpayserver-plugin/plugin/bin/Debug/net8.0/BTCPayServer.Plugins.BareBitcoin.dll"
-}' > ../btcpayserver/BTCPayServer/appsettings.dev.json
+  "DEBUG_PLUGINS": "<absolute-path-to>/plugin/bin/Debug/net8.0/BTCPayServer.Plugins.BareBitcoin.dll"
+}' > BTCPayServer/appsettings.dev.json
 ```
 
-Finally, also in the cloned BTCPay Server, run:
+Start the development environment:
 
 ```shell
-cd btcpayserver/BTCPayServer.Tests
+cd BTCPayServer.Tests
 docker-compose up dev
 ```
 
-Then, start the BTCPay Server using for example VSCode (.NET Core Launch (web))
-
-Finally, navigate to https://localhost:14142
-
-## Compilation of binaries
-
-```shell
-./pluginpacker.sh
-```
-
-This creates a file in `plugin/tmp/out/BTCPayServer.Plugins.BareBitcoin.btcpay` which then should be uploaded to BTCPay in the plugins section.
+Launch BTCPay Server (e.g., via VS Code's ".NET Core Launch (web)") and navigate to https://localhost:14142
