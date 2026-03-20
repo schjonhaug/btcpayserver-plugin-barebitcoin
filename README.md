@@ -61,17 +61,17 @@ git clone https://github.com/btcpayserver/btcpayserver.git
 
 ### Build
 
-Build the BTCPay Server submodule:
+Build BTCPay Server:
 
 ```shell
-dotnet build submodules/btcpayserver
+dotnet build ../btcpayserver/BTCPayServer/BTCPayServer.csproj
 ```
 
 Add the plugin to the BTCPay Server solution:
 
 ```shell
 cd btcpayserver
-dotnet sln add ../barebitcoin-btcpayserver-plugin/plugin -s Plugins
+dotnet sln add ../btcpayserver-plugin-barebitcoin/plugin -s Plugins
 ```
 
 Build the plugin:
