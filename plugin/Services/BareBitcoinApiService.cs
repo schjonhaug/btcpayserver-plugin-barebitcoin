@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using BTCPayServer;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Http;
 
@@ -195,10 +196,7 @@ public class BareBitcoinApiService
                 }
             }
 
-            // Get store ID from current store context for tracing
-            var storeData = _httpContextAccessor.HttpContext?.GetStoreData();
-            var storeId = storeData?.Id ?? "unknown";
-            request.Headers.Add("x-bb-trace", $"{storeId}+{Guid.NewGuid()}");
+            request.Headers.Add("x-bb-trace", CreateTraceHeader());
 
             foreach (var header in request.Headers)
             {
@@ -233,4 +231,28 @@ public class BareBitcoinApiService
             throw;
         }
     }
-} 
+
+    private string CreateTraceHeader()
+    {
+        try
+        {
+            var storeId = _httpContextAccessor.HttpContext?.GetStoreData()?.Id;
+            if (!string.IsNullOrWhiteSpace(storeId))
+            {
+                return $"{storeId}+{Guid.NewGuid()}";
+            }
+        }
+        catch (InvalidOperationException ex)
+        {
+            _logger.LogDebug(ex, "StoreData is unavailable for BareBitcoin trace header generation");
+        }
+
+        var requestId = _httpContextAccessor.HttpContext?.TraceIdentifier;
+        if (!string.IsNullOrWhiteSpace(requestId))
+        {
+            return $"{requestId}+{Guid.NewGuid()}";
+        }
+
+        return $"background+{Guid.NewGuid()}";
+    }
+}
