@@ -4,7 +4,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using BTCPayServer;
+using BTCPayServer.Data;
 using Microsoft.Extensions.Logging;
 using Microsoft.AspNetCore.Http;
 
@@ -234,17 +234,11 @@ public class BareBitcoinApiService
 
     private string CreateTraceHeader()
     {
-        try
+        if (_httpContextAccessor.HttpContext?.Items.TryGetValue("BTCPAY.STOREDATA", out var storeItem) is true &&
+            storeItem is StoreData storeData &&
+            !string.IsNullOrWhiteSpace(storeData.Id))
         {
-            var storeId = _httpContextAccessor.HttpContext?.GetStoreData()?.Id;
-            if (!string.IsNullOrWhiteSpace(storeId))
-            {
-                return $"{storeId}+{Guid.NewGuid()}";
-            }
-        }
-        catch (InvalidOperationException ex)
-        {
-            _logger.LogDebug(ex, "StoreData is unavailable for BareBitcoin trace header generation");
+            return $"{storeData.Id}+{Guid.NewGuid()}";
         }
 
         var requestId = _httpContextAccessor.HttpContext?.TraceIdentifier;
