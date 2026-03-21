@@ -1,0 +1,31 @@
+name: Plugin Builder Compatibility
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 8.0.x
+
+      - name: Show environment
+        run: dotnet --info
+
+      - name: Build plugin in Release
+        run: dotnet build plugin/BTCPayServer.Plugins.BareBitcoin.csproj -c Release
