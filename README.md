@@ -53,15 +53,26 @@ Use the provided script to generate your BTCPay Server connection string:
 
 ### Prerequisites
 
-Clone BTCPay Server adjacent to this repository:
+Use one of these BTCPay Server source layouts:
+
+- Clone BTCPay Server adjacent to this repository for local development.
+- Or initialize the `submodules/btcpayserver` submodule, which is what Plugin Builder uses.
+
+Adjacent checkout:
 
 ```shell
 git clone https://github.com/btcpayserver/btcpayserver.git
 ```
 
+Submodule checkout:
+
+```shell
+git submodule update --init --recursive
+```
+
 ### Build
 
-Build BTCPay Server:
+Build BTCPay Server if you are using the adjacent checkout:
 
 ```shell
 dotnet build ../btcpayserver/BTCPayServer/BTCPayServer.csproj
@@ -77,7 +88,7 @@ dotnet sln add ../btcpayserver-plugin-barebitcoin/plugin -s Plugins
 Build the plugin:
 
 ```shell
-dotnet build ../barebitcoin-btcpayserver-plugin/plugin
+dotnet build ../btcpayserver-plugin-barebitcoin/plugin/BTCPayServer.Plugins.BareBitcoin.csproj
 ```
 
 ### Run Locally
@@ -98,3 +109,19 @@ docker-compose up dev
 ```
 
 Launch BTCPay Server (e.g., via VS Code's ".NET Core Launch (web)") and navigate to https://localhost:14142
+
+## Public Release
+
+To publish a new public plugin build for BTCPay Server, use the Plugin Builder:
+
+- URL: https://plugin-builder.btcpayserver.org/
+- Public plugin page: https://plugin-builder.btcpayserver.org/public/plugins/barebitcoin
+
+Create a new build with:
+
+1. Git repository: `https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin`
+2. Git branch or tag: the release tag, for example `v1.1.2`
+3. Directory to the plugin's project: `plugin`
+4. Dotnet build configuration: `Release`
+
+After the build finishes successfully, release that build in the Plugin Builder UI. The GitHub release alone does not publish the plugin to the public BTCPay plugin directory.

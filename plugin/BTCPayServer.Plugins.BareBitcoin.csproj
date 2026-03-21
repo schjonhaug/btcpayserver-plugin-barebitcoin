@@ -9,7 +9,7 @@
     <PropertyGroup>
         <Product>Bare Bitcoin</Product>
         <Description>Bare Bitcoin Lightning support</Description>
-        <Version>1.1.2</Version>
+        <Version>1.1.3</Version>
         <Authors>Andreas Schjønhaug</Authors>
         <Company>Enogtjue</Company>
         <RepositoryUrl>https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin</RepositoryUrl>
@@ -36,7 +36,14 @@
 
     <ItemGroup>
         <EmbeddedResource Include="Resources\**" />
+    </ItemGroup>
+
+    <ItemGroup Condition="Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
         <ProjectReference Include="..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj" />
+    </ItemGroup>
+
+    <ItemGroup Condition="!Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj') and Exists('..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
+        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" />
     </ItemGroup>
 
 
