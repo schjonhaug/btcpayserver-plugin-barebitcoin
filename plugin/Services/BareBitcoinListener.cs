@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -33,6 +34,9 @@ public class BareBitcoinListener : ILightningInvoiceListener
     // during each polling cycle. This is instance-specific and not shared between listeners.
     private readonly HashSet<string> _trackedInvoices = new HashSet<string>();
     private bool _isDisposed;
+
+    // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
+    private const int MaxPollConcurrency = 10;
 
     public bool IsDisposed => _isDisposed;
 
@@ -86,14 +90,36 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     _trackedInvoices.Add(invoiceId);
                 }
 
-                // Check each tracked invoice for status updates
-                _logger.LogDebug("Polling {Count} tracked invoices for updates", _trackedInvoices.Count);
-                foreach (var invoiceId in _trackedInvoices.ToList())
+                // Poll all tracked invoices concurrently with bounded concurrency
+                var invoiceList = _trackedInvoices.ToList();
+                _logger.LogDebug("Polling {Count} tracked invoices for updates", invoiceList.Count);
+                var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
+
+                await Parallel.ForEachAsync(invoiceList, new ParallelOptions
                 {
-                    _logger.LogDebug("Polling invoice {InvoiceId}", invoiceId);
-                    var invoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
-                    
-                    // Handle invoice no longer existing
+                    MaxDegreeOfParallelism = MaxPollConcurrency,
+                    CancellationToken = _cts.Token
+                }, async (invoiceId, token) =>
+                {
+                    try
+                    {
+                        _logger.LogDebug("Polling invoice {InvoiceId}", invoiceId);
+                        var invoice = await _lightningClient.GetInvoice(invoiceId, token);
+                        results.Add((invoiceId, invoice));
+                    }
+                    catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
+                    {
+                        throw; // Shutdown requested, propagate to stop the loop
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}, will retry next cycle", invoiceId);
+                    }
+                });
+
+                // Process results sequentially
+                foreach (var (invoiceId, invoice) in results)
+                {
                     if (invoice == null)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
@@ -102,7 +128,6 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         continue;
                     }
 
-                    // Process invoice based on its status
                     _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
