@@ -174,8 +174,9 @@ public class BareBitcoinListenerTests : IDisposable
         var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         var client = new FakeLightningClient((_, _) => throw new NotImplementedException());
 
-        Assert.Throws<ArgumentOutOfRangeException>(() =>
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
             new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: capacity));
+        Assert.Equal("channelCapacity", ex.ParamName);
     }
 
     /// <summary>
