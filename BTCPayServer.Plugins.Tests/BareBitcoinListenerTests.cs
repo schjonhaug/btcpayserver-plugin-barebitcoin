@@ -166,6 +166,19 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.True(listener.IsDisposed);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_InvalidChannelCapacity_ThrowsArgumentOutOfRange(int capacity)
+    {
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        var client = new FakeLightningClient((_, _) => throw new NotImplementedException());
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: capacity));
+        Assert.Equal("channelCapacity", ex.ParamName);
+    }
+
     /// <summary>
     /// Minimal ILightningClient implementation for testing BareBitcoinListener.
     /// Only GetInvoice(string, CancellationToken) is functional; all other methods throw.
