@@ -106,7 +106,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     await _invoiceService.TrackInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
                 }
@@ -117,7 +117,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     await _invoiceService.UntrackInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException)
                 {
                     Logger.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
                 }
