@@ -4,7 +4,6 @@ using System.Linq;
 using System.Net.Http;
 using BTCPayServer.Lightning;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.Http;
 using Network = NBitcoin.Network;
 
 namespace BTCPayServer.Plugins.BareBitcoin;
@@ -13,13 +12,11 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly IHttpContextAccessor _httpContextAccessor;
 
-    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IHttpContextAccessor httpContextAccessor)
+    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
-        _httpContextAccessor = httpContextAccessor;
     }
 
 
@@ -75,7 +72,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _httpContextAccessor);
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"));
       
 
         try

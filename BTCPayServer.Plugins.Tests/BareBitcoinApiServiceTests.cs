@@ -1,0 +1,48 @@
+using System;
+using System.Linq;
+using System.Net;
+using System.Net.Http;
+using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
+using BTCPayServer.Plugins.BareBitcoin.Services;
+using Microsoft.Extensions.Logging.Abstractions;
+using Xunit;
+
+namespace BTCPayServer.Plugins.Tests;
+
+public class BareBitcoinApiServiceTests
+{
+    [Fact]
+    public async Task MakeAuthenticatedRequest_AddsRequestIndependentTraceHeader()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        });
+        var httpClient = new HttpClient(handler);
+        var service = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: "public-key",
+            httpClient: httpClient,
+            logger: NullLogger.Instance);
+
+        await service.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts", useSimpleAuth: true);
+
+        var traceHeader = Assert.Single(handler.Requests).Headers.GetValues("x-bb-trace").Single();
+        Assert.StartsWith("background+", traceHeader, StringComparison.Ordinal);
+    }
+
+    private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder = responder;
+        public HttpRequestMessage[] Requests => _requests.ToArray();
+        private readonly System.Collections.Generic.List<HttpRequestMessage> _requests = [];
+
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _requests.Add(request);
+            return Task.FromResult(_responder(request));
+        }
+    }
+}

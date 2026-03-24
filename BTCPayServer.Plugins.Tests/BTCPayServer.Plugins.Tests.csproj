@@ -17,5 +17,9 @@
         </PackageReference>
     </ItemGroup>
 
+    <ItemGroup>
+        <ProjectReference Include="..\plugin\BTCPayServer.Plugins.BareBitcoin.csproj" />
+    </ItemGroup>
+
 
 </Project>

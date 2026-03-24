@@ -22,7 +22,6 @@ namespace BTCPayServer.Plugins.BareBitcoin
             applicationBuilder.AddSingleton<ILightningConnectionStringHandler>(provider => provider.GetRequiredService<BareBitcoinLightningConnectionStringHandler>());
             applicationBuilder.AddSingleton<BareBitcoinLightningConnectionStringHandler>();
             applicationBuilder.AddSingleton<ISwaggerProvider, BareBitcoinSwaggerProvider>();
-            applicationBuilder.AddHttpContextAccessor();
 
             base.Execute(applicationBuilder);
         }

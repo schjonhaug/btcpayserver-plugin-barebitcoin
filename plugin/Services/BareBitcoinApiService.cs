@@ -4,9 +4,7 @@ using System.Collections.Generic;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
-using BTCPayServer.Data;
 using Microsoft.Extensions.Logging;
-using Microsoft.AspNetCore.Http;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
@@ -20,7 +18,6 @@ public class BareBitcoinApiService
     private readonly string _publicKey;
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
-    private readonly IHttpContextAccessor _httpContextAccessor;
 
     // Static nonce tracking with async-compatible lock
     private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
@@ -34,14 +31,12 @@ public class BareBitcoinApiService
     /// <param name="publicKey">The public key (API key) used for all requests</param>
     /// <param name="httpClient">The HTTP client to use for requests</param>
     /// <param name="logger">Logger for request and error tracking</param>
-    /// <param name="httpContextAccessor">Accessor for store context information</param>
-    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger, IHttpContextAccessor httpContextAccessor)
+    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
         _httpClient = httpClient;
         _logger = logger;
-        _httpContextAccessor = httpContextAccessor;
     }
 
     /// <summary>
@@ -233,20 +228,5 @@ public class BareBitcoinApiService
     }
 
     private string CreateTraceHeader()
-    {
-        if (_httpContextAccessor.HttpContext?.Items.TryGetValue("BTCPAY.STOREDATA", out var storeItem) is true &&
-            storeItem is StoreData storeData &&
-            !string.IsNullOrWhiteSpace(storeData.Id))
-        {
-            return $"{storeData.Id}+{Guid.NewGuid()}";
-        }
-
-        var requestId = _httpContextAccessor.HttpContext?.TraceIdentifier;
-        if (!string.IsNullOrWhiteSpace(requestId))
-        {
-            return $"{requestId}+{Guid.NewGuid()}";
-        }
-
-        return $"background+{Guid.NewGuid()}";
-    }
+        => $"background+{Guid.NewGuid()}";
 }
