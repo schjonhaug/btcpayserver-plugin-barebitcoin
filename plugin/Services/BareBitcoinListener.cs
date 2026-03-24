@@ -128,6 +128,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
                 _logger.LogDebug("Polling cancelled");
                 break;
             }
+            catch (ChannelClosedException)
+            {
+                _logger.LogDebug("Invoice channel closed, stopping polling");
+                break;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while polling for invoice updates");
