@@ -18,6 +18,7 @@ public class BareBitcoinApiService
     private readonly string _publicKey;
     private readonly HttpClient _httpClient;
     private readonly ILogger _logger;
+    private readonly string _tracePrefix;
 
     // Static nonce tracking with async-compatible lock
     private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
@@ -30,12 +31,14 @@ public class BareBitcoinApiService
     /// <param name="publicKey">The public key (API key) used for all requests</param>
     /// <param name="httpClient">The HTTP client to use for requests</param>
     /// <param name="logger">Logger for request and error tracking</param>
-    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger)
+    /// <param name="tracePrefix">Prefix for the x-bb-trace header, used to correlate requests to a specific account or context</param>
+    public BareBitcoinApiService(string privateKey, string publicKey, HttpClient httpClient, ILogger logger, string tracePrefix = "background")
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
         _httpClient = httpClient;
         _logger = logger;
+        _tracePrefix = IsValidHeaderValue(tracePrefix) ? tracePrefix : "background";
     }
 
     /// <summary>
@@ -221,6 +224,9 @@ public class BareBitcoinApiService
         }
     }
 
+    private static bool IsValidHeaderValue(string value)
+        => !string.IsNullOrWhiteSpace(value) && !value.AsSpan().ContainsAny('\r', '\n');
+
     private string CreateTraceHeader()
-        => $"background+{Guid.NewGuid()}";
+        => $"{_tracePrefix}+{Guid.NewGuid()}";
 }

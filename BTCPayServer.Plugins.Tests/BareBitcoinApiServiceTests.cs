@@ -34,6 +34,52 @@ public class BareBitcoinApiServiceTests
     }
 
     [Fact]
+    public async Task MakeAuthenticatedRequest_UsesCustomTracePrefix()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        });
+        var httpClient = new HttpClient(handler);
+        var service = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: "public-key",
+            httpClient: httpClient,
+            logger: NullLogger.Instance,
+            tracePrefix: "my-account-123");
+
+        await service.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts", useSimpleAuth: true);
+
+        var traceHeader = Assert.Single(handler.Requests).Headers.GetValues("x-bb-trace").Single();
+        Assert.StartsWith("my-account-123+", traceHeader, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("bad\r\nvalue")]
+    [InlineData("bad\nvalue")]
+    public async Task MakeAuthenticatedRequest_InvalidTracePrefix_FallsBackToBackground(string invalidPrefix)
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        });
+        var httpClient = new HttpClient(handler);
+        var service = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: "public-key",
+            httpClient: httpClient,
+            logger: NullLogger.Instance,
+            tracePrefix: invalidPrefix);
+
+        await service.MakeAuthenticatedRequest("GET", "/v1/user/bitcoin-accounts", useSimpleAuth: true);
+
+        var traceHeader = Assert.Single(handler.Requests).Headers.GetValues("x-bb-trace").Single();
+        Assert.StartsWith("background+", traceHeader, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task MakeAuthenticatedRequest_ConcurrentCalls_ProduceUniqueNonces()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
