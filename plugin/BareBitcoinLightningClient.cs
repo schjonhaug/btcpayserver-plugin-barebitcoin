@@ -25,20 +25,13 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly Network _network;
     private readonly BareBitcoinApiService _apiService;
     private readonly BareBitcoinBalanceService _balanceService;
-    private static readonly BareBitcoinInvoiceService _invoiceService;
-    private static readonly object _invoiceServiceLock = new object();
+    private readonly BareBitcoinInvoiceService _invoiceService;
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
 
-    static BareBitcoinLightningClient()
-    {
-        // Initialize the singleton invoice service
-        _invoiceService = new BareBitcoinInvoiceService(null!); // Logger will be set in constructor
-    }
-
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, BareBitcoinInvoiceService invoiceService)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
@@ -47,18 +40,10 @@ public class BareBitcoinLightningClient : ILightningClient
         _network = network;
         _httpClient = httpClient;
         Logger = logger;
-        
+        _invoiceService = invoiceService;
+
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
-        
-        // Set the logger for the invoice service
-        lock (_invoiceServiceLock)
-        {
-            if (_invoiceService.Logger == null)
-            {
-                _invoiceService.Logger = logger;
-            }
-        }
     }
 
     public override string ToString()

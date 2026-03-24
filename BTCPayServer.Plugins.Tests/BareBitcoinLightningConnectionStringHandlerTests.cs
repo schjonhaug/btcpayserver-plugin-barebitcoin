@@ -1,17 +1,34 @@
+using System;
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin;
+using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using NBitcoin;
 using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinLightningConnectionStringHandlerTests
+public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 {
+    private readonly string _tempDir;
+
+    public BareBitcoinLightningConnectionStringHandlerTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
+
     [Fact]
     public void Create_ReturnsClientWithoutHttpContextDependency()
     {
@@ -25,7 +42,8 @@ public class BareBitcoinLightningConnectionStringHandlerTests
               ]
             }
             """)));
-        var handler = new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance);
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(_tempDir, "tracked-invoices.json"));
+        var handler = new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance, invoiceService);
 
         var client = handler.Create(
             "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123",
