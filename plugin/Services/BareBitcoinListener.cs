@@ -106,14 +106,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
-                        // Attempt to notify BTCPay Server of the payment via the channel
-                        _logger.LogInformation("Invoice {InvoiceId} has been paid, attempting to write to channel", invoice.Id);
-                        var writeResult = _invoices.Writer.TryWrite(invoice);
-                        _logger.LogDebug("Write to channel for invoice {InvoiceId} result: {Result}", invoice.Id, writeResult);
-                        if (!writeResult)
-                        {
-                            _logger.LogWarning("Failed to write paid invoice {InvoiceId} to channel", invoice.Id);
-                        }
+                        _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
+                        await _invoices.Writer.WriteAsync(invoice, _cts.Token);
                         _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
@@ -132,6 +126,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
             catch (OperationCanceledException)
             {
                 _logger.LogDebug("Polling cancelled");
+                break;
+            }
+            catch (ChannelClosedException)
+            {
+                _logger.LogDebug("Invoice channel closed, stopping polling");
                 break;
             }
             catch (Exception ex)
