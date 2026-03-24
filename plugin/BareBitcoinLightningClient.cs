@@ -314,7 +314,7 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 await _invoiceService.TrackInvoice(invoiceId, cancellation);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (IOException ex)
             {
                 Logger.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
             }
