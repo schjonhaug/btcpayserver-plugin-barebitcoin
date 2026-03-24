@@ -30,7 +30,15 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
-    private const int MaxPollConcurrency = 10;
+    private readonly int _maxPollConcurrency;
+
+    // Adaptive backoff state
+    private int _consecutiveHighErrorCycles;
+    private static readonly TimeSpan BasePollDelay = TimeSpan.FromSeconds(2);
+    private static readonly TimeSpan MaxPollDelay = TimeSpan.FromSeconds(30);
+    private const double ErrorThreshold = 0.5; // 50% failure rate triggers backoff
+
+    internal TimeSpan CurrentPollDelay { get; private set; } = TimeSpan.FromSeconds(2);
 
     public bool IsDisposed => _isDisposed;
 
@@ -41,16 +49,18 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
     /// </summary>
-    public BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger)
-        : this(lightningClient, invoiceService, logger, channelCapacity: 100) { }
+    public BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
+        : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity)
+    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
+        if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
 
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
+        _maxPollConcurrency = maxPollConcurrency;
         _cts = new CancellationTokenSource();
 
         // Initialize bounded channel with single reader/writer for thread safety
@@ -84,10 +94,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
                 _logger.LogDebug("Polling {Count} tracked invoices for updates", trackedInvoices.Count);
                 var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
+                var failureCount = 0;
 
                 await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
                 {
-                    MaxDegreeOfParallelism = MaxPollConcurrency,
+                    MaxDegreeOfParallelism = _maxPollConcurrency,
                     CancellationToken = _cts.Token
                 }, async (invoiceId, token) =>
                 {
@@ -103,6 +114,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     }
                     catch (Exception ex)
                     {
+                        Interlocked.Increment(ref failureCount);
                         _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}, will retry next cycle", invoiceId);
                     }
                 });
@@ -133,9 +145,36 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     }
                 }
 
+                // Adaptive backoff: increase delay when error rate is high
+                if (trackedInvoices.Count > 0)
+                {
+                    var errorRate = failureCount / (double)trackedInvoices.Count;
+                    if (errorRate >= ErrorThreshold)
+                    {
+                        _consecutiveHighErrorCycles++;
+                        CurrentPollDelay = TimeSpan.FromSeconds(Math.Min(
+                            BasePollDelay.TotalSeconds * Math.Pow(2, _consecutiveHighErrorCycles),
+                            MaxPollDelay.TotalSeconds));
+                        _logger.LogWarning("High error rate ({ErrorRate:P0}), backing off to {Delay}s", errorRate, CurrentPollDelay.TotalSeconds);
+                    }
+                    else
+                    {
+                        if (_consecutiveHighErrorCycles > 0)
+                            _logger.LogInformation("Error rate recovered, resuming normal polling interval");
+                        _consecutiveHighErrorCycles = 0;
+                        CurrentPollDelay = BasePollDelay;
+                    }
+                }
+                else if (_consecutiveHighErrorCycles > 0)
+                {
+                    // Reset backoff when idle to ensure prompt polling for newly tracked invoices
+                    _consecutiveHighErrorCycles = 0;
+                    CurrentPollDelay = BasePollDelay;
+                }
+
                 // Wait before next polling cycle
-                _logger.LogDebug("Polling cycle complete, waiting 2 seconds before next cycle");
-                await Task.Delay(TimeSpan.FromSeconds(2), _cts.Token);
+                _logger.LogDebug("Polling cycle complete, waiting {Delay}s before next cycle", CurrentPollDelay.TotalSeconds);
+                await Task.Delay(CurrentPollDelay, _cts.Token);
             }
             catch (OperationCanceledException)
             {
