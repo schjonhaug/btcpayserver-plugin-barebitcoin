@@ -63,8 +63,18 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         if (!kv.TryGetValue("account-id", out var accountId))
         {
-            error = "The key 'account-id' is not found"; 
+            error = "The key 'account-id' is not found";
             return null;
+        }
+
+        var maxPollConcurrency = 10;
+        if (kv.TryGetValue("max-poll-concurrency", out var maxPollConcurrencyStr))
+        {
+            if (!int.TryParse(maxPollConcurrencyStr, out maxPollConcurrency) || maxPollConcurrency is < 1 or > 100)
+            {
+                error = "The key 'max-poll-concurrency' must be an integer between 1 and 100";
+                return null;
+            }
         }
 
         error = null;
@@ -75,7 +85,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService);
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
       
 
         try

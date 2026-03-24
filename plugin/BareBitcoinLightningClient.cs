@@ -27,12 +27,13 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinApiService _apiService;
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly BareBitcoinInvoiceService _invoiceService;
+    private readonly int _maxPollConcurrency;
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, BareBitcoinInvoiceService invoiceService)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, BareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
@@ -42,6 +43,8 @@ public class BareBitcoinLightningClient : ILightningClient
         _httpClient = httpClient;
         Logger = logger;
         _invoiceService = invoiceService;
+        if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
+        _maxPollConcurrency = maxPollConcurrency;
 
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
@@ -360,7 +363,7 @@ public class BareBitcoinLightningClient : ILightningClient
             }
 
             Logger.LogInformation("Creating new listener");
-            _currentListener = new BareBitcoinListener(this, _invoiceService, Logger);
+            _currentListener = new BareBitcoinListener(this, _invoiceService, Logger, maxPollConcurrency: _maxPollConcurrency);
             return _currentListener;
         }
         finally
