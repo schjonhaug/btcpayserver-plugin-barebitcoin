@@ -31,6 +31,7 @@ public class BareBitcoinInvoiceService
 
     /// <summary>
     /// Adds an invoice to the central tracking registry and persists the change to disk.
+    /// If persistence fails, the in-memory change is rolled back to keep state consistent.
     /// </summary>
     public async Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -41,7 +42,11 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                SaveToDisk();
+                if (!await SaveToDiskAsync(cancellation))
+                {
+                    _trackedInvoiceRegistry.Remove(invoiceId);
+                    throw new IOException($"Failed to persist tracked invoice {invoiceId} to disk");
+                }
             }
         }
         finally
@@ -52,6 +57,7 @@ public class BareBitcoinInvoiceService
 
     /// <summary>
     /// Removes an invoice from the central tracking registry and persists the change to disk.
+    /// If persistence fails, the in-memory change is rolled back to keep state consistent.
     /// </summary>
     public async Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -62,7 +68,11 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                SaveToDisk();
+                if (!await SaveToDiskAsync(cancellation))
+                {
+                    _trackedInvoiceRegistry.Add(invoiceId);
+                    throw new IOException($"Failed to persist untracked invoice {invoiceId} to disk");
+                }
             }
         }
         finally
@@ -116,7 +126,8 @@ public class BareBitcoinInvoiceService
         }
     }
 
-    private void SaveToDisk()
+    /// <returns>true if persistence succeeded, false otherwise</returns>
+    private async Task<bool> SaveToDiskAsync(CancellationToken cancellation = default)
     {
         try
         {
@@ -126,12 +137,14 @@ public class BareBitcoinInvoiceService
 
             var tmpPath = _dataFilePath + ".tmp";
             var json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
-            File.WriteAllText(tmpPath, json);
+            await File.WriteAllTextAsync(tmpPath, json, cancellation);
             File.Move(tmpPath, _dataFilePath, overwrite: true);
+            return true;
         }
         catch (IOException ex)
         {
             _logger.LogError(ex, "Failed to persist tracked invoices to {Path}", _dataFilePath);
+            return false;
         }
     }
 }
