@@ -42,7 +42,7 @@ public class BareBitcoinListenerTests : IDisposable
     [Fact]
     public async Task PaidInvoice_IsDeliveredAndUntracked()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice("inv-1");
 
         var client = new FakeLightningClient((invoiceId, _) =>
@@ -64,7 +64,7 @@ public class BareBitcoinListenerTests : IDisposable
     [Fact]
     public async Task ChannelFull_BackpressuresInsteadOfDropping()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         // Track a single invoice initially to avoid HashSet iteration order issues
         await invoiceService.TrackInvoice("inv-1");
 
@@ -107,7 +107,7 @@ public class BareBitcoinListenerTests : IDisposable
     [Fact]
     public async Task CancellationDuringWriteAsync_ShutsDownGracefully()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         // Two invoices: in a single polling cycle, the first fills the channel
         // and the second blocks on WriteAsync.
         await invoiceService.TrackInvoice("inv-1");
@@ -141,7 +141,7 @@ public class BareBitcoinListenerTests : IDisposable
     [Fact]
     public async Task Dispose_WhilePolling_ExitsGracefully()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice("inv-1");
 
         // Signal when the polling loop reaches GetInvoice
