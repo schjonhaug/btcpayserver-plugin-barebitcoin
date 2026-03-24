@@ -38,5 +38,15 @@ jobs:
       - name: Build plugin in Release
         run: dotnet build plugin/BTCPayServer.Plugins.BareBitcoin.csproj -c Release
 
+      - name: Ensure static web asset manifests exist
+        run: |
+          dir="submodules/btcpayserver/BTCPayServer/obj/Release/net8.0"
+          for f in staticwebassets.development.json staticwebassets.build.endpoints.json; do
+            [ -f "$dir/$f" ] || echo '{}' > "$dir/$f"
+          done
+
+      - name: Build tests in Release
+        run: dotnet build BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release
+
       - name: Run tests
-        run: dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release
+        run: dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release --no-build
