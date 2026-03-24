@@ -48,7 +48,7 @@ public class BareBitcoinLightningClient : ILightningClient
         _httpClient = httpClient;
         Logger = logger;
         
-        _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger);
+        _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
         
         // Set the logger for the invoice service
