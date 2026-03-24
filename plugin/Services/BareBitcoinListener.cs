@@ -49,6 +49,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity)
     {
+        if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
+
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
