@@ -1,8 +1,6 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
-using System.Collections.Generic;
-using System.Linq;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -13,7 +11,6 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
 /// Handles the monitoring of invoices by polling their status and notifying when payments are detected.
-/// Each listener maintains its own working copy of tracked invoices, refreshed from the central registry during each polling cycle.
 /// This implementation uses a polling approach with a bounded channel for payment notifications.
 /// </summary>
 public class BareBitcoinListener : ILightningInvoiceListener
@@ -30,9 +27,6 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
     
-    // Working copy of tracked invoices, refreshed from the central registry in BareBitcoinInvoiceService
-    // during each polling cycle. This is instance-specific and not shared between listeners.
-    private readonly HashSet<string> _trackedInvoices = new HashSet<string>();
     private bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
@@ -69,7 +63,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// <summary>
     /// Main polling loop that monitors tracked invoices for payment status changes.
     /// During each cycle, it:
-    /// 1. Refreshes its working copy from the central registry
+    /// 1. Fetches the current tracked invoices from the central registry
     /// 2. Checks each tracked invoice for updates
     /// 3. Notifies of any detected payments via the channel
     /// </summary>
@@ -83,22 +77,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
             {
                 // Get the current list of invoices to track
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
-                _logger.LogDebug("Found {Count} tracked invoices", trackedInvoices.Count);
-                
-                // Update our tracking list
-                _trackedInvoices.Clear();
-                foreach (var invoiceId in trackedInvoices)
-                {
-                    _logger.LogDebug("Adding invoice {InvoiceId} to tracking list", invoiceId);
-                    _trackedInvoices.Add(invoiceId);
-                }
-
-                // Poll all tracked invoices concurrently with bounded concurrency
-                var invoiceList = _trackedInvoices.ToList();
-                _logger.LogDebug("Polling {Count} tracked invoices for updates", invoiceList.Count);
+                _logger.LogDebug("Polling {Count} tracked invoices for updates", trackedInvoices.Count);
                 var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
 
-                await Parallel.ForEachAsync(invoiceList, new ParallelOptions
+                await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
                 {
                     MaxDegreeOfParallelism = MaxPollConcurrency,
                     CancellationToken = _cts.Token
@@ -126,7 +108,6 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     if (invoice == null)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
-                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                         continue;
                     }
@@ -136,13 +117,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
                         await _invoices.Writer.WriteAsync(invoice, _cts.Token);
-                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has expired, removing from tracking list", invoiceId);
-                        _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
                 }
