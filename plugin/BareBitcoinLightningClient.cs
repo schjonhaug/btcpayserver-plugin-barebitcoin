@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -106,7 +107,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     await _invoiceService.TrackInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (IOException ex)
                 {
                     Logger.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
                 }
@@ -117,7 +118,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     await _invoiceService.UntrackInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (IOException ex)
                 {
                     Logger.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
                 }
