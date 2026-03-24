@@ -98,15 +98,29 @@ public class BareBitcoinLightningClient : ILightningClient
                 Preimage = preimage
             };
 
-            // Automatically track pending invoices when they are retrieved
+            // Persist tracking as best-effort: a disk error must not prevent
+            // returning the valid invoice we already have from the API.
             if (status == LightningInvoiceStatus.Unpaid)
             {
-                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                try
+                {
+                    await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
+                }
             }
-            // Only remove expired invoices from tracking - paid ones will be removed after notification
             else if (status == LightningInvoiceStatus.Expired)
             {
-                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+                try
+                {
+                    await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+                }
+                catch (Exception ex)
+                {
+                    Logger.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+                }
             }
 
             Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
