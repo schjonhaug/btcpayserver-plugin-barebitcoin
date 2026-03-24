@@ -307,8 +307,16 @@ public class BareBitcoinLightningClient : ILightningClient
             var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
             var invoiceId = depositDestinationId ?? bolt11.PaymentHash?.ToString() ?? string.Empty;
 
-            // Add to tracking list
-            await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            // Best-effort persist: the API already created the invoice, so a
+            // disk error must not prevent returning it to the caller.
+            try
+            {
+                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                Logger.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
+            }
 
             return new LightningInvoice
             {
