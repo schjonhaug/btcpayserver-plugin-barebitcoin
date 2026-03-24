@@ -15,7 +15,7 @@ jobs:
       contents: read
       pull-requests: write
     outputs:
-      final_message: ${{ steps.run_codex.outputs.final-message }}
+      final_message: ${{ steps.run_codex.outputs['final-message'] }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v5
@@ -34,7 +34,7 @@ jobs:
         run: |
           BASE_SHA=$(git merge-base origin/${{ github.event.pull_request.base.ref }} HEAD)
           echo "files<<EOF" >> $GITHUB_OUTPUT
-          git diff --name-only $BASE_SHA HEAD
+          git diff --name-only $BASE_SHA HEAD >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
           echo "base_sha=$BASE_SHA" >> $GITHUB_OUTPUT
 
