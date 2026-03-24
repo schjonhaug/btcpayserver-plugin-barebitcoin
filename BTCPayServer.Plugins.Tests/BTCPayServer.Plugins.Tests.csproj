@@ -22,6 +22,10 @@
             <Private>true</Private>
             <ExcludeAssets>none</ExcludeAssets>
         </ProjectReference>
+        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj">
+            <Properties>StaticWebAssetsEnabled=false</Properties>
+            <Private>false</Private>
+        </ProjectReference>
     </ItemGroup>
 
 
