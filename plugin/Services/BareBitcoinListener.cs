@@ -42,8 +42,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     public bool IsDisposed => _isDisposed;
 
-    internal Action<LightningInvoice>? OnBeforeWrite { get; set; }
-    internal Action<LightningInvoice>? OnAfterWrite { get; set; }
+    internal Action<LightningInvoice>? OnBeforeWrite { get; }
+    internal Action<LightningInvoice>? OnAfterWrite { get; }
 
     /// <summary>
     /// Initializes a new instance of the BareBitcoinListener.
@@ -52,7 +52,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     public BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
         : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10)
+    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
@@ -62,6 +62,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _logger = logger;
         _maxPollConcurrency = maxPollConcurrency;
         _cts = new CancellationTokenSource();
+        OnBeforeWrite = onBeforeWrite;
+        OnAfterWrite = onAfterWrite;
 
         // Initialize bounded channel with single reader/writer for thread safety
         _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(channelCapacity)

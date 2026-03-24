@@ -76,13 +76,12 @@ public class BareBitcoinListenerTests : IDisposable
             Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
 
         // Capacity 1: only one invoice fits before WriteAsync blocks
-        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1);
-
-        listener.OnAfterWrite = invoice =>
-        {
-            if (invoice.Id == "inv-1")
-                firstWritten.TrySetResult();
-        };
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1,
+            onAfterWrite: invoice =>
+            {
+                if (invoice.Id == "inv-1")
+                    firstWritten.TrySetResult();
+            });
 
         using var cts = new CancellationTokenSource(TestTimeout);
 
@@ -120,14 +119,13 @@ public class BareBitcoinListenerTests : IDisposable
             Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
 
         // Capacity 1: first paid invoice fills the channel, second blocks
-        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1);
-
-        listener.OnBeforeWrite = _ =>
-        {
-            var count = Interlocked.Increment(ref writeCount);
-            if (count == 2)
-                secondWriteBlocking.TrySetResult();
-        };
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1,
+            onBeforeWrite: _ =>
+            {
+                var count = Interlocked.Increment(ref writeCount);
+                if (count == 2)
+                    secondWriteBlocking.TrySetResult();
+            });
 
         // Wait until the second WriteAsync is about to block
         await secondWriteBlocking.Task.WaitAsync(TestTimeout);
