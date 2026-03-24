@@ -12,6 +12,8 @@ namespace BTCPayServer.Plugins.Tests;
 
 public class BareBitcoinListenerTests
 {
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
+
     private static LightningInvoice PaidInvoice(string id) => new()
     {
         Id = id,
@@ -71,7 +73,7 @@ public class BareBitcoinListenerTests
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
 
         // Wait for first invoice to be written, then add second before reading
-        await firstWritten.Task;
+        await firstWritten.Task.WaitAsync(TestTimeout);
         await invoiceService.TrackInvoice("inv-2");
 
         // Read both invoices — neither should be dropped
@@ -112,7 +114,7 @@ public class BareBitcoinListenerTests
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1);
 
         // Wait until the second GetInvoice has been called
-        await secondGetInvoice.Task;
+        await secondGetInvoice.Task.WaitAsync(TestTimeout);
 
         // Dispose cancels _cts, which should unblock WriteAsync and shut down cleanly
         listener.Dispose();
@@ -140,7 +142,7 @@ public class BareBitcoinListenerTests
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10);
 
         // Wait deterministically for the polling loop to reach GetInvoice
-        await reachedGetInvoice.Task;
+        await reachedGetInvoice.Task.WaitAsync(TestTimeout);
 
         // Dispose should cancel the token, unblocking the fake, and shut down
         listener.Dispose();
