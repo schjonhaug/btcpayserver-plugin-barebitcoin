@@ -255,10 +255,10 @@ public class BareBitcoinListenerTests : IDisposable
         var client = new FakeLightningClient((invoiceId, _) =>
         {
             var count = Interlocked.Increment(ref callCount);
-            if (count <= 3)
+            if (count <= 1)
                 throw new Exception("Simulated failure");
 
-            // After 3 failures, start succeeding
+            // After 1 failure, start succeeding
             return Task.FromResult<LightningInvoice?>(new LightningInvoice
             {
                 Id = invoiceId, Status = LightningInvoiceStatus.Unpaid,

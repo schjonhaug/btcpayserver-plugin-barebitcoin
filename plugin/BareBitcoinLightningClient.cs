@@ -43,6 +43,7 @@ public class BareBitcoinLightningClient : ILightningClient
         _httpClient = httpClient;
         Logger = logger;
         _invoiceService = invoiceService;
+        if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
 
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
