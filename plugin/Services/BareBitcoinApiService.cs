@@ -38,7 +38,7 @@ public class BareBitcoinApiService
         _publicKey = publicKey;
         _httpClient = httpClient;
         _logger = logger;
-        _tracePrefix = tracePrefix;
+        _tracePrefix = IsValidHeaderValue(tracePrefix) ? tracePrefix : "background";
     }
 
     /// <summary>
@@ -223,6 +223,9 @@ public class BareBitcoinApiService
             throw;
         }
     }
+
+    private static bool IsValidHeaderValue(string value)
+        => !string.IsNullOrWhiteSpace(value) && !value.AsSpan().ContainsAny('\r', '\n');
 
     private string CreateTraceHeader()
         => $"{_tracePrefix}+{Guid.NewGuid()}";
