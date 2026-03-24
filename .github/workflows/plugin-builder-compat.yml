@@ -35,8 +35,8 @@ jobs:
       - name: Show environment
         run: dotnet --info
 
-      - name: Build plugin in Release
-        run: dotnet build plugin/BTCPayServer.Plugins.BareBitcoin.csproj -c Release
+      - name: Build tests in Release
+        run: dotnet build BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release
 
       - name: Ensure static web asset manifests exist
         run: |
