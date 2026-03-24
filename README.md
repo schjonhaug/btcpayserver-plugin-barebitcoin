@@ -53,6 +53,8 @@ Use the provided script to generate your BTCPay Server connection string:
 
 ### Prerequisites
 
+Install the [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0). The plugin and tests target `net8.0` and do not roll forward to newer major versions.
+
 Use one of these BTCPay Server source layouts:
 
 - Clone BTCPay Server adjacent to this repository for local development.

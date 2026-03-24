@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Threading;
@@ -98,15 +99,29 @@ public class BareBitcoinLightningClient : ILightningClient
                 Preimage = preimage
             };
 
-            // Automatically track pending invoices when they are retrieved
+            // Persist tracking as best-effort: a disk error must not prevent
+            // returning the valid invoice we already have from the API.
             if (status == LightningInvoiceStatus.Unpaid)
             {
-                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                try
+                {
+                    await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                }
+                catch (IOException ex)
+                {
+                    Logger.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
+                }
             }
-            // Only remove expired invoices from tracking - paid ones will be removed after notification
             else if (status == LightningInvoiceStatus.Expired)
             {
-                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+                try
+                {
+                    await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+                }
+                catch (IOException ex)
+                {
+                    Logger.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+                }
             }
 
             Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
@@ -293,8 +308,16 @@ public class BareBitcoinLightningClient : ILightningClient
             var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
             var invoiceId = depositDestinationId ?? bolt11.PaymentHash?.ToString() ?? string.Empty;
 
-            // Add to tracking list
-            await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            // Best-effort persist: the API already created the invoice, so a
+            // disk error must not prevent returning it to the caller.
+            try
+            {
+                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            }
+            catch (IOException ex)
+            {
+                Logger.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
+            }
 
             return new LightningInvoice
             {
