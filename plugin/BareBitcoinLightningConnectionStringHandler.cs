@@ -70,9 +70,9 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
         var maxPollConcurrency = 10;
         if (kv.TryGetValue("max-poll-concurrency", out var maxPollConcurrencyStr))
         {
-            if (!int.TryParse(maxPollConcurrencyStr, out maxPollConcurrency) || maxPollConcurrency < 1)
+            if (!int.TryParse(maxPollConcurrencyStr, out maxPollConcurrency) || maxPollConcurrency is < 1 or > 100)
             {
-                error = "The key 'max-poll-concurrency' must be a positive integer";
+                error = "The key 'max-poll-concurrency' must be an integer between 1 and 100";
                 return null;
             }
         }

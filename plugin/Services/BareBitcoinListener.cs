@@ -52,6 +52,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
+        if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
 
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
@@ -158,6 +159,12 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         _consecutiveHighErrorCycles = 0;
                         CurrentPollDelay = BasePollDelay;
                     }
+                }
+                else if (_consecutiveHighErrorCycles > 0)
+                {
+                    // Reset backoff when idle to ensure prompt polling for newly tracked invoices
+                    _consecutiveHighErrorCycles = 0;
+                    CurrentPollDelay = BasePollDelay;
                 }
 
                 // Wait before next polling cycle
