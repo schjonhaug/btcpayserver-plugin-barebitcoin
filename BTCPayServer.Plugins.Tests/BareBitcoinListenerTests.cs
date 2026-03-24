@@ -68,25 +68,22 @@ public class BareBitcoinListenerTests : IDisposable
         // Track a single invoice initially to avoid HashSet iteration order issues
         await invoiceService.TrackInvoice("inv-1");
 
-        // Signal when the first invoice has been written to the channel
+        // Signal after the first invoice has actually been written to the channel
         var firstWritten = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var invoiceCount = 0;
 
         var client = new FakeLightningClient((invoiceId, _) =>
-        {
-            if (invoiceId == "inv-1")
-            {
-                var count = Interlocked.Increment(ref invoiceCount);
-                if (count == 1)
-                    firstWritten.TrySetResult();
-            }
-            return Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId));
-        });
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
 
         // Capacity 1: only one invoice fits before WriteAsync blocks
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1);
 
-        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        listener.OnAfterWrite = invoice =>
+        {
+            if (invoice.Id == "inv-1")
+                firstWritten.TrySetResult();
+        };
+
+        using var cts = new CancellationTokenSource(TestTimeout);
 
         // Wait for first invoice to be written, then add second before reading
         await firstWritten.Task.WaitAsync(TestTimeout);
@@ -113,24 +110,26 @@ public class BareBitcoinListenerTests : IDisposable
         await invoiceService.TrackInvoice("inv-1");
         await invoiceService.TrackInvoice("inv-2");
 
-        // Signal when the second GetInvoice call happens — the first write
+        // Signal when the second WriteAsync is about to execute — the first write
         // has already filled the channel, so the second WriteAsync will block.
-        var secondGetInvoice = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var pollCount = 0;
+        var secondWriteBlocking = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var writeCount = 0;
 
         var client = new FakeLightningClient((invoiceId, _) =>
-        {
-            var count = Interlocked.Increment(ref pollCount);
-            if (count >= 2)
-                secondGetInvoice.TrySetResult();
-            return Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId));
-        });
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
 
         // Capacity 1: first paid invoice fills the channel, second blocks
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 1);
 
-        // Wait until the second GetInvoice has been called
-        await secondGetInvoice.Task.WaitAsync(TestTimeout);
+        listener.OnBeforeWrite = _ =>
+        {
+            var count = Interlocked.Increment(ref writeCount);
+            if (count == 2)
+                secondWriteBlocking.TrySetResult();
+        };
+
+        // Wait until the second WriteAsync is about to block
+        await secondWriteBlocking.Task.WaitAsync(TestTimeout);
 
         // Dispose cancels _cts, which should unblock WriteAsync and shut down cleanly
         listener.Dispose();

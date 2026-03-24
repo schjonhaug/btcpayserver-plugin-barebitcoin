@@ -40,6 +40,9 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     public bool IsDisposed => _isDisposed;
 
+    internal Action<LightningInvoice>? OnBeforeWrite { get; set; }
+    internal Action<LightningInvoice>? OnAfterWrite { get; set; }
+
     /// <summary>
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
@@ -135,7 +138,9 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
+                        OnBeforeWrite?.Invoke(invoice);
                         await _invoices.Writer.WriteAsync(invoice, _cts.Token);
+                        OnAfterWrite?.Invoke(invoice);
                         _trackedInvoices.Remove(invoiceId);
                         await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
                     }
