@@ -107,7 +107,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         var invoice = await _lightningClient.GetInvoice(invoiceId, token);
                         results.Add((invoiceId, invoice));
                     }
-                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
+                    {
+                        throw; // Shutdown requested, propagate to stop the loop
+                    }
+                    catch (Exception ex)
                     {
                         _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}, will retry next cycle", invoiceId);
                     }
