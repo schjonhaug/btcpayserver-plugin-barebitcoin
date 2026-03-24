@@ -122,7 +122,10 @@ public class BareBitcoinInvoiceService
             if (invoiceIds != null)
             {
                 foreach (var id in invoiceIds)
-                    _trackedInvoiceRegistry.Add(id);
+                {
+                    if (!string.IsNullOrWhiteSpace(id))
+                        _trackedInvoiceRegistry.Add(id);
+                }
                 _logger.LogInformation("Loaded {Count} tracked invoices from disk", _trackedInvoiceRegistry.Count);
             }
         }
