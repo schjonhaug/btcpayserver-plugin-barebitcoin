@@ -120,7 +120,7 @@ public class BareBitcoinInvoiceService
         {
             _logger.LogWarning(ex, "Failed to parse tracked invoices file at {Path}, starting with empty registry", _dataFilePath);
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogWarning(ex, "Failed to read tracked invoices file at {Path}, starting with empty registry", _dataFilePath);
         }
@@ -141,7 +141,7 @@ public class BareBitcoinInvoiceService
             File.Move(tmpPath, _dataFilePath, overwrite: true);
             return true;
         }
-        catch (IOException ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
             _logger.LogError(ex, "Failed to persist tracked invoices to {Path}", _dataFilePath);
             return false;
