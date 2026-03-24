@@ -123,6 +123,8 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+            if (!_disposed)
+                ScheduleFlush();
         }
         finally
         {
@@ -143,7 +145,11 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
 
     private void ScheduleFlush()
     {
-        _debounceTimer.Change(DebounceInterval, Timeout.InfiniteTimeSpan);
+        try
+        {
+            _debounceTimer.Change(DebounceInterval, Timeout.InfiniteTimeSpan);
+        }
+        catch (ObjectDisposedException) { }
     }
 
     private void LoadFromDisk()
