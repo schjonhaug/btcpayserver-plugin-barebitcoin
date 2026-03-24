@@ -55,4 +55,10 @@
       <PackageReference Include="GraphQL.Client" Version="6.0.2" />
       <PackageReference Include="GraphQL.Client.Serializer.Newtonsoft" Version="6.0.2" />
     </ItemGroup>
+
+    <ItemGroup>
+      <AssemblyAttribute Include="System.Runtime.CompilerServices.InternalsVisibleToAttribute">
+        <_Parameter1>BTCPayServer.Plugins.Tests</_Parameter1>
+      </AssemblyAttribute>
+    </ItemGroup>
 </Project>

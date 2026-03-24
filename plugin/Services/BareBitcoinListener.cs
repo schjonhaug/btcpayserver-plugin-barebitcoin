@@ -18,7 +18,7 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// </summary>
 public class BareBitcoinListener : ILightningInvoiceListener
 {
-    private readonly BareBitcoinLightningClient _lightningClient;
+    private readonly ILightningClient _lightningClient;
     private readonly BareBitcoinInvoiceService _invoiceService;
     
     // Channel for communicating paid invoices back to BTCPay Server
@@ -44,21 +44,24 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
     /// </summary>
-    public BareBitcoinListener(BareBitcoinLightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger)
+    public BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger)
+        : this(lightningClient, invoiceService, logger, channelCapacity: 100) { }
+
+    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity)
     {
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
         _cts = new CancellationTokenSource();
-        
+
         // Initialize bounded channel with single reader/writer for thread safety
-        _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(100)
+        _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(channelCapacity)
         {
             SingleWriter = true,
             SingleReader = true,
             FullMode = BoundedChannelFullMode.Wait
         });
-        
+
         // Start the polling task immediately
         _pollingTask = StartPolling();
     }
