@@ -29,6 +29,9 @@ jobs:
         with:
           dotnet-version: 8.0.x
 
+      - name: Pin SDK to .NET 8
+        run: dotnet new globaljson --sdk-version 8.0.0 --roll-forward latestFeature
+
       - name: Show environment
         run: dotnet --info
 
