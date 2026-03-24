@@ -14,24 +14,31 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// This service acts as the source of truth for which invoices should be monitored across all listener instances.
 /// Provides thread-safe operations for adding, removing, and querying tracked invoices.
 /// Tracked invoices are persisted to disk so they survive server restarts.
+/// Disk writes are debounced to avoid excessive I/O under high invoice throughput.
 /// </summary>
-public class BareBitcoinInvoiceService
+public class BareBitcoinInvoiceService : IAsyncDisposable
 {
     private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
+    private readonly Timer _debounceTimer;
+    private bool _dirty;
+    private bool _disposed;
+
+    internal static readonly TimeSpan DebounceInterval = TimeSpan.FromSeconds(1);
 
     public BareBitcoinInvoiceService(ILogger logger, string dataFilePath)
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
+        _debounceTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
         LoadFromDisk();
     }
 
     /// <summary>
-    /// Adds an invoice to the central tracking registry and persists the change to disk.
-    /// If persistence fails, the in-memory change is rolled back to keep state consistent.
+    /// Adds an invoice to the central tracking registry.
+    /// The change is persisted to disk asynchronously via a debounce timer.
     /// </summary>
     public async Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -42,16 +49,8 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                try
-                {
-                    if (!await SaveToDiskAsync(cancellation))
-                        throw new IOException($"Failed to persist tracked invoice {invoiceId} to disk");
-                }
-                catch
-                {
-                    _trackedInvoiceRegistry.Remove(invoiceId);
-                    throw;
-                }
+                _dirty = true;
+                ScheduleFlush();
             }
         }
         finally
@@ -61,8 +60,8 @@ public class BareBitcoinInvoiceService
     }
 
     /// <summary>
-    /// Removes an invoice from the central tracking registry and persists the change to disk.
-    /// If persistence fails, the in-memory change is rolled back to keep state consistent.
+    /// Removes an invoice from the central tracking registry.
+    /// The change is persisted to disk asynchronously via a debounce timer.
     /// </summary>
     public async Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -73,16 +72,8 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                try
-                {
-                    if (!await SaveToDiskAsync(cancellation))
-                        throw new IOException($"Failed to persist untracked invoice {invoiceId} to disk");
-                }
-                catch
-                {
-                    _trackedInvoiceRegistry.Add(invoiceId);
-                    throw;
-                }
+                _dirty = true;
+                ScheduleFlush();
             }
         }
         finally
@@ -105,6 +96,43 @@ public class BareBitcoinInvoiceService
         {
             _invoiceTrackingLock.Release();
         }
+    }
+
+    /// <summary>
+    /// Immediately persists any dirty in-memory state to disk.
+    /// </summary>
+    public async Task FlushAsync()
+    {
+        await _invoiceTrackingLock.WaitAsync();
+        try
+        {
+            if (!_dirty) return;
+            await SaveToDiskAsync();
+            _dirty = false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+        }
+        finally
+        {
+            _invoiceTrackingLock.Release();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_disposed) return;
+        _disposed = true;
+
+        await _debounceTimer.DisposeAsync();
+        await FlushAsync();
+        _invoiceTrackingLock.Dispose();
+    }
+
+    private void ScheduleFlush()
+    {
+        _debounceTimer.Change(DebounceInterval, Timeout.InfiniteTimeSpan);
     }
 
     private void LoadFromDisk()
@@ -139,25 +167,15 @@ public class BareBitcoinInvoiceService
         }
     }
 
-    /// <returns>true if persistence succeeded, false otherwise</returns>
-    private async Task<bool> SaveToDiskAsync(CancellationToken cancellation = default)
+    private async Task SaveToDiskAsync()
     {
-        try
-        {
-            var directory = Path.GetDirectoryName(_dataFilePath);
-            if (directory != null)
-                Directory.CreateDirectory(directory);
+        var directory = Path.GetDirectoryName(_dataFilePath);
+        if (directory != null)
+            Directory.CreateDirectory(directory);
 
-            var tmpPath = _dataFilePath + ".tmp";
-            var json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
-            await File.WriteAllTextAsync(tmpPath, json, cancellation);
-            File.Move(tmpPath, _dataFilePath, overwrite: true);
-            return true;
-        }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        {
-            _logger.LogError(ex, "Failed to persist tracked invoices to {Path}", _dataFilePath);
-            return false;
-        }
+        var tmpPath = _dataFilePath + ".tmp";
+        var json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+        await File.WriteAllTextAsync(tmpPath, json);
+        File.Move(tmpPath, _dataFilePath, overwrite: true);
     }
 }
