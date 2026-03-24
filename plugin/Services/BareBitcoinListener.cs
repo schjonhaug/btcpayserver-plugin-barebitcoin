@@ -36,7 +36,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
-    private static readonly SemaphoreSlim _pollConcurrencyLimiter = new(10, 10);
+    private const int MaxPollConcurrency = 10;
 
     public bool IsDisposed => _isDisposed;
 
@@ -95,27 +95,23 @@ public class BareBitcoinListener : ILightningInvoiceListener
                 _logger.LogDebug("Polling {Count} tracked invoices for updates", invoiceList.Count);
                 var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
 
-                var tasks = invoiceList.Select(async invoiceId =>
+                await Parallel.ForEachAsync(invoiceList, new ParallelOptions
                 {
-                    await _pollConcurrencyLimiter.WaitAsync(_cts.Token);
+                    MaxDegreeOfParallelism = MaxPollConcurrency,
+                    CancellationToken = _cts.Token
+                }, async (invoiceId, token) =>
+                {
                     try
                     {
                         _logger.LogDebug("Polling invoice {InvoiceId}", invoiceId);
-                        var invoice = await _lightningClient.GetInvoice(invoiceId, _cts.Token);
+                        var invoice = await _lightningClient.GetInvoice(invoiceId, token);
                         results.Add((invoiceId, invoice));
                     }
-                    catch (OperationCanceledException) { throw; }
-                    catch (Exception ex)
+                    catch (Exception ex) when (ex is not OperationCanceledException)
                     {
                         _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}, will retry next cycle", invoiceId);
                     }
-                    finally
-                    {
-                        _pollConcurrencyLimiter.Release();
-                    }
-                }).ToList();
-
-                await Task.WhenAll(tasks);
+                });
 
                 // Process results sequentially
                 foreach (var (invoiceId, invoice) in results)
