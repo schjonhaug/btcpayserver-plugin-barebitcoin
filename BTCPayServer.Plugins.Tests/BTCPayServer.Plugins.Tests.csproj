@@ -6,7 +6,6 @@
         <Nullable>enable</Nullable>
 
         <IsPackable>false</IsPackable>
-        <StaticWebAssetsEnabled>false</StaticWebAssetsEnabled>
     </PropertyGroup>
 
     <ItemGroup>
@@ -23,7 +22,6 @@
             <Private>true</Private>
             <ExcludeAssets>none</ExcludeAssets>
         </ProjectReference>
-        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" />
     </ItemGroup>
 
 
