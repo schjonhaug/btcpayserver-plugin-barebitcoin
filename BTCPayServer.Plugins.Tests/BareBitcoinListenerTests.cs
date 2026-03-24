@@ -11,9 +11,24 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinListenerTests
+public class BareBitcoinListenerTests : IDisposable
 {
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
+    private readonly string _tempDir;
+
+    public BareBitcoinListenerTests()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        Directory.CreateDirectory(_tempDir);
+    }
+
+    public void Dispose()
+    {
+        if (Directory.Exists(_tempDir))
+            Directory.Delete(_tempDir, recursive: true);
+    }
+
+    private string InvoiceFilePath => Path.Combine(_tempDir, "tracked-invoices.json");
 
     private static LightningInvoice PaidInvoice(string id) => new()
     {
@@ -27,7 +42,7 @@ public class BareBitcoinListenerTests
     [Fact]
     public async Task PaidInvoice_IsDeliveredAndUntracked()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "tracked-invoices.json"));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice("inv-1");
 
         var client = new FakeLightningClient((invoiceId, _) =>
@@ -49,7 +64,7 @@ public class BareBitcoinListenerTests
     [Fact]
     public async Task ChannelFull_BackpressuresInsteadOfDropping()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "tracked-invoices.json"));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         // Track a single invoice initially to avoid HashSet iteration order issues
         await invoiceService.TrackInvoice("inv-1");
 
@@ -92,7 +107,7 @@ public class BareBitcoinListenerTests
     [Fact]
     public async Task CancellationDuringWriteAsync_ShutsDownGracefully()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "tracked-invoices.json"));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         // Two invoices: in a single polling cycle, the first fills the channel
         // and the second blocks on WriteAsync.
         await invoiceService.TrackInvoice("inv-1");
@@ -126,7 +141,7 @@ public class BareBitcoinListenerTests
     [Fact]
     public async Task Dispose_WhilePolling_ExitsGracefully()
     {
-        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName(), "tracked-invoices.json"));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice("inv-1");
 
         // Signal when the polling loop reaches GetInvoice

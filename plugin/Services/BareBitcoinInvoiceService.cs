@@ -42,10 +42,15 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                if (!await SaveToDiskAsync(cancellation))
+                try
+                {
+                    if (!await SaveToDiskAsync(cancellation))
+                        throw new IOException($"Failed to persist tracked invoice {invoiceId} to disk");
+                }
+                catch
                 {
                     _trackedInvoiceRegistry.Remove(invoiceId);
-                    throw new IOException($"Failed to persist tracked invoice {invoiceId} to disk");
+                    throw;
                 }
             }
         }
@@ -68,10 +73,15 @@ public class BareBitcoinInvoiceService
             {
                 _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
-                if (!await SaveToDiskAsync(cancellation))
+                try
+                {
+                    if (!await SaveToDiskAsync(cancellation))
+                        throw new IOException($"Failed to persist untracked invoice {invoiceId} to disk");
+                }
+                catch
                 {
                     _trackedInvoiceRegistry.Add(invoiceId);
-                    throw new IOException($"Failed to persist untracked invoice {invoiceId} to disk");
+                    throw;
                 }
             }
         }
