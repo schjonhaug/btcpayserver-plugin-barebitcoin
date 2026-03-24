@@ -1,9 +1,11 @@
+using System.IO;
 using System.Net;
 using System.Net.Http;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin;
+using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 using NBitcoin;
 using Xunit;
@@ -25,7 +27,8 @@ public class BareBitcoinLightningConnectionStringHandlerTests
               ]
             }
             """)));
-        var handler = new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance);
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.GetTempFileName());
+        var handler = new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance, invoiceService);
 
         var client = handler.Create(
             "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123",
