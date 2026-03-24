@@ -131,6 +131,9 @@ public class BareBitcoinApiService
             return await MakeRequest(method, path, data);
         }
         
+        // Nonce generation is serialized via _nonceLock to guarantee uniqueness.
+        // Requests may arrive at the server out of nonce order under concurrency;
+        // the BareBitcoin API validates nonce uniqueness, not arrival order.
         var nonce = await GetNextNonce();
         var hmac = CreateHmac(_privateKey, method, path, nonce, data);
 

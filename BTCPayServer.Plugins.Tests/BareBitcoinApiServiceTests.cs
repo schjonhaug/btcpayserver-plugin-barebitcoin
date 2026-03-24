@@ -33,11 +33,41 @@ public class BareBitcoinApiServiceTests
         Assert.StartsWith("background+", traceHeader, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public async Task MakeAuthenticatedRequest_ConcurrentCalls_ProduceUniqueNonces()
+    {
+        var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent("{}", Encoding.UTF8, "application/json")
+        });
+        var httpClient = new HttpClient(handler);
+        var service = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: "public-key",
+            httpClient: httpClient,
+            logger: NullLogger.Instance);
+
+        const int concurrentRequests = 20;
+        var tasks = Enumerable.Range(0, concurrentRequests)
+            .Select(_ => service.MakeAuthenticatedRequest("GET", "/v1/test"))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(concurrentRequests, handler.Requests.Length);
+
+        var nonces = handler.Requests
+            .Select(r => r.Headers.GetValues("x-bb-api-nonce").Single())
+            .ToArray();
+
+        Assert.Equal(concurrentRequests, nonces.Distinct().Count());
+    }
+
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder = responder;
         public HttpRequestMessage[] Requests => _requests.ToArray();
-        private readonly System.Collections.Generic.List<HttpRequestMessage> _requests = [];
+        private readonly System.Collections.Concurrent.ConcurrentBag<HttpRequestMessage> _requests = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
