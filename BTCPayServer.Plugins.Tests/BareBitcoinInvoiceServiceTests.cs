@@ -32,7 +32,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.TrackInvoice("inv-2");
         await service.FlushAsync();
 
-        var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         var tracked = await service2.GetTrackedInvoices();
 
         Assert.Contains("inv-1", tracked);
@@ -49,7 +49,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.UntrackInvoice("inv-1");
         await service.FlushAsync();
 
-        var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         var tracked = await service2.GetTrackedInvoices();
 
         Assert.DoesNotContain("inv-1", tracked);
@@ -96,7 +96,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         // Dispose without waiting for debounce timer — should flush
         await service.DisposeAsync();
 
-        var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         var tracked = await service2.GetTrackedInvoices();
 
         Assert.Contains("inv-1", tracked);

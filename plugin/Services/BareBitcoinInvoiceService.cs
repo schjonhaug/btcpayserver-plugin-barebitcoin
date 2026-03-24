@@ -49,8 +49,9 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
             {
                 _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
+                if (!_dirty)
+                    ScheduleFlush();
                 _dirty = true;
-                ScheduleFlush();
             }
         }
         finally
@@ -72,8 +73,9 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
             {
                 _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
                     invoiceId, _trackedInvoiceRegistry.Count);
+                if (!_dirty)
+                    ScheduleFlush();
                 _dirty = true;
-                ScheduleFlush();
             }
         }
         finally
@@ -103,7 +105,15 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
     /// </summary>
     public async Task FlushAsync()
     {
-        await _invoiceTrackingLock.WaitAsync();
+        try
+        {
+            await _invoiceTrackingLock.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
         try
         {
             if (!_dirty) return;
@@ -116,7 +126,8 @@ public class BareBitcoinInvoiceService : IAsyncDisposable
         }
         finally
         {
-            _invoiceTrackingLock.Release();
+            try { _invoiceTrackingLock.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 
