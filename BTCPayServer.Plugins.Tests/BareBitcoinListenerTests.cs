@@ -166,6 +166,132 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.True(listener.IsDisposed);
     }
 
+    [Fact]
+    public async Task CustomMaxPollConcurrency_IsRespected()
+    {
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        for (var i = 0; i < 20; i++)
+            await invoiceService.TrackInvoice($"inv-{i}");
+
+        var currentConcurrency = 0;
+        var maxObservedConcurrency = 0;
+        var allPolled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var polledCount = 0;
+
+        var client = new FakeLightningClient(async (invoiceId, ct) =>
+        {
+            var current = Interlocked.Increment(ref currentConcurrency);
+            // Record the high-water mark
+            int observed;
+            do
+            {
+                observed = Volatile.Read(ref maxObservedConcurrency);
+                if (current <= observed) break;
+            } while (Interlocked.CompareExchange(ref maxObservedConcurrency, current, observed) != observed);
+
+            await Task.Delay(50, ct); // simulate work
+            Interlocked.Decrement(ref currentConcurrency);
+
+            if (Interlocked.Increment(ref polledCount) >= 20)
+                allPolled.TrySetResult();
+
+            return new LightningInvoice
+            {
+                Id = invoiceId, Status = LightningInvoiceStatus.Unpaid,
+                Amount = LightMoney.Satoshis(1000), PaymentHash = invoiceId
+            };
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 100, maxPollConcurrency: 3);
+
+        await allPolled.Task.WaitAsync(TestTimeout);
+        listener.Dispose();
+
+        Assert.True(maxObservedConcurrency <= 3, $"Max concurrency was {maxObservedConcurrency}, expected <= 3");
+        Assert.True(maxObservedConcurrency >= 1, "Should have had at least 1 concurrent call");
+    }
+
+    [Fact]
+    public async Task AdaptiveBackoff_IncreasesDelayOnHighErrorRate()
+    {
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+        await invoiceService.TrackInvoice("inv-2");
+
+        var cycleCount = 0;
+        var thirdCycleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var client = new FakeLightningClient((_, _) =>
+        {
+            // Count cycles based on first invoice polled per cycle
+            var count = Interlocked.Increment(ref cycleCount);
+            if (count >= 6) // 3 cycles * 2 invoices = 6 calls
+                thirdCycleStarted.TrySetResult();
+            throw new Exception("Simulated backend failure");
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 100, maxPollConcurrency: 10);
+
+        await thirdCycleStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(listener.CurrentPollDelay > TimeSpan.FromSeconds(2),
+            $"Expected backoff > 2s, got {listener.CurrentPollDelay.TotalSeconds}s");
+
+        listener.Dispose();
+    }
+
+    [Fact]
+    public async Task AdaptiveBackoff_RecoversWhenErrorsStop()
+    {
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+
+        var callCount = 0;
+        var recoveryObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+        {
+            var count = Interlocked.Increment(ref callCount);
+            if (count <= 3)
+                throw new Exception("Simulated failure");
+
+            // After 3 failures, start succeeding
+            return Task.FromResult<LightningInvoice?>(new LightningInvoice
+            {
+                Id = invoiceId, Status = LightningInvoiceStatus.Unpaid,
+                Amount = LightMoney.Satoshis(1000), PaymentHash = invoiceId
+            });
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 100, maxPollConcurrency: 10);
+
+        // Wait for backoff to engage and then recover
+        // Poll until CurrentPollDelay returns to base or timeout
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        var sawBackoff = false;
+        while (!cts.Token.IsCancellationRequested)
+        {
+            if (listener.CurrentPollDelay > TimeSpan.FromSeconds(2))
+                sawBackoff = true;
+            if (sawBackoff && listener.CurrentPollDelay <= TimeSpan.FromSeconds(2))
+            {
+                recoveryObserved.TrySetResult();
+                break;
+            }
+            await Task.Delay(100, cts.Token);
+        }
+
+        await recoveryObserved.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(sawBackoff, "Should have observed backoff");
+        Assert.Equal(TimeSpan.FromSeconds(2), listener.CurrentPollDelay);
+
+        listener.Dispose();
+    }
+
     /// <summary>
     /// Minimal ILightningClient implementation for testing BareBitcoinListener.
     /// Only GetInvoice(string, CancellationToken) is functional; all other methods throw.
