@@ -2,6 +2,7 @@
 
     <PropertyGroup>
         <TargetFramework>net8.0</TargetFramework>
+        <RollForward>Major</RollForward>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
 
@@ -18,7 +19,11 @@
     </ItemGroup>
 
     <ItemGroup>
-        <ProjectReference Include="..\plugin\BTCPayServer.Plugins.BareBitcoin.csproj" />
+        <ProjectReference Include="..\plugin\BTCPayServer.Plugins.BareBitcoin.csproj">
+            <Private>true</Private>
+            <ExcludeAssets>none</ExcludeAssets>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj" />
     </ItemGroup>
 
 
