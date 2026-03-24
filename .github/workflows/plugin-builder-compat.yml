@@ -34,3 +34,9 @@ jobs:
 
       - name: Build plugin in Release
         run: dotnet build plugin/BTCPayServer.Plugins.BareBitcoin.csproj -c Release
+
+      - name: Build tests in Release
+        run: dotnet build BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release
+
+      - name: Run tests
+        run: dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release --no-build
