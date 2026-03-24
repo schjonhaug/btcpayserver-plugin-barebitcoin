@@ -21,7 +21,6 @@ public class BareBitcoinApiService
 
     // Static nonce tracking with async-compatible lock
     private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
-    private static readonly SemaphoreSlim _requestLock = new SemaphoreSlim(1, 1);
     private static long _lastNonce;
 
     /// <summary>
@@ -132,25 +131,20 @@ public class BareBitcoinApiService
             return await MakeRequest(method, path, data);
         }
         
-        await _requestLock.WaitAsync();
-        try 
-        {
-            var nonce = await GetNextNonce();
-            var hmac = CreateHmac(_privateKey, method, path, nonce, data);
-            
-            var additionalHeaders = new Dictionary<string, string>
-            {
-                ["x-bb-api-hmac"] = hmac,
-                ["x-bb-api-nonce"] = nonce.ToString()
-            };
+        // Nonce generation is serialized via _nonceLock to guarantee uniqueness.
+        // Requests may arrive at the server out of nonce order under concurrency;
+        // the BareBitcoin API validates nonce uniqueness, not arrival order.
+        var nonce = await GetNextNonce();
+        var hmac = CreateHmac(_privateKey, method, path, nonce, data);
 
-            _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
-            return await MakeRequest(method, path, data, additionalHeaders);
-        }
-        finally
+        var additionalHeaders = new Dictionary<string, string>
         {
-            _requestLock.Release();
-        }
+            ["x-bb-api-hmac"] = hmac,
+            ["x-bb-api-nonce"] = nonce.ToString()
+        };
+
+        _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
+        return await MakeRequest(method, path, data, additionalHeaders);
     }
 
     /// <summary>
