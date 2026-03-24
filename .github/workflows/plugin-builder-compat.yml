@@ -1,4 +1,9 @@
 name: Plugin Builder Compatibility
+# NOTE: Actions are pinned to commit SHAs for supply-chain security.
+# To update, resolve the new tag to a SHA:
+#   gh api repos/OWNER/REPO/git/ref/tags/TAG --jq '.object.sha'
+# If the result type is "tag" (annotated), dereference with:
+#   gh api repos/OWNER/REPO/git/tags/SHA --jq '.object.sha'
 
 on:
   pull_request:
@@ -15,12 +20,12 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           submodules: recursive
 
       - name: Setup .NET 8
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
         with:
           dotnet-version: 8.0.x
 
