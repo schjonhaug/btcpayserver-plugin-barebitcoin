@@ -35,12 +35,10 @@ jobs:
       - name: Show environment
         run: dotnet --info
 
-      - name: Build tests in Release
-        run: dotnet build BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release -m:1
-
       - name: Ensure static web asset manifests exist
         run: |
           dir="submodules/btcpayserver/BTCPayServer/obj/Release/net8.0"
+          mkdir -p "$dir"
           for f in staticwebassets.development.json staticwebassets.build.endpoints.json; do
             [ -f "$dir/$f" ] || echo '{}' > "$dir/$f"
           done
