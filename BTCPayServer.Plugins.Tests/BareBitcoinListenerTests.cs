@@ -63,6 +63,46 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
+    public async Task ExpiredInvoice_IsUntrackedWithoutDelivery()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(new LightningInvoice
+            {
+                Id = invoiceId,
+                Status = LightningInvoiceStatus.Expired,
+                Amount = LightMoney.Satoshis(1000),
+                PaymentHash = invoiceId
+            }));
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10);
+
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => listener.WaitInvoice(cts.Token));
+    }
+
+    [Fact]
+    public async Task MissingInvoice_IsUntrackedWithoutDelivery()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+
+        var client = new FakeLightningClient((_, _) =>
+            Task.FromResult<LightningInvoice?>(null));
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10);
+
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => listener.WaitInvoice(cts.Token));
+    }
+
+    [Fact]
     public async Task ChannelFull_BackpressuresInsteadOfDropping()
     {
         await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
@@ -448,6 +488,22 @@ public class BareBitcoinListenerTests : IDisposable
         // Assert at least 2 overlapping polls to prove concurrency (sequential would always be 1).
         Assert.True(Volatile.Read(ref peakInFlight) >= 2,
             $"Peak concurrent polls was {peakInFlight}, expected >= 2 to prove parallel execution");
+    }
+
+    private static async Task WaitUntilInvoiceIsUntracked(BareBitcoinInvoiceService invoiceService, string invoiceId)
+    {
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        while (!cts.Token.IsCancellationRequested)
+        {
+            var trackedInvoices = await invoiceService.GetTrackedInvoices(cts.Token);
+            if (!trackedInvoices.Contains(invoiceId))
+                return;
+
+            await Task.Delay(50, cts.Token);
+        }
+
+        throw new TimeoutException($"Invoice {invoiceId} was still tracked after {TestTimeout.TotalSeconds} seconds.");
     }
 
     /// <summary>
