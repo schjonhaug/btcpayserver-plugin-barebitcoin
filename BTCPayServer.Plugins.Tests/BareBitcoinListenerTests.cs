@@ -492,15 +492,15 @@ public class BareBitcoinListenerTests : IDisposable
 
     private static async Task WaitUntilInvoiceIsUntracked(BareBitcoinInvoiceService invoiceService, string invoiceId)
     {
-        using var cts = new CancellationTokenSource(TestTimeout);
+        var deadline = DateTimeOffset.UtcNow + TestTimeout;
 
-        while (!cts.Token.IsCancellationRequested)
+        while (DateTimeOffset.UtcNow < deadline)
         {
-            var trackedInvoices = await invoiceService.GetTrackedInvoices(cts.Token);
+            var trackedInvoices = await invoiceService.GetTrackedInvoices();
             if (!trackedInvoices.Contains(invoiceId))
                 return;
 
-            await Task.Delay(50, cts.Token);
+            await Task.Delay(50);
         }
 
         throw new TimeoutException($"Invoice {invoiceId} was still tracked after {TestTimeout.TotalSeconds} seconds.");
