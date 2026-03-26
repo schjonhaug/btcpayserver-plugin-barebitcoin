@@ -671,6 +671,41 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Contains("inv-ok", received);
     }
 
+    [Fact]
+    public async Task DeliveredPaidInvoices_ClearsWhenCapacityExceeded()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice("inv-1");
+        await realService.TrackInvoice("inv-2");
+        await realService.TrackInvoice("inv-3");
+
+        // UntrackInvoice always throws, so entries accumulate in _deliveredPaidInvoices
+        var alwaysFaultyService = new AlwaysFaultyUntrackService(realService);
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+
+        // maxDeliveredCapacity: 2 means the 3rd Add triggers the clear
+        using var listener = new BareBitcoinListener(client, alwaysFaultyService, NullLogger.Instance,
+            channelCapacity: 10, maxDeliveredCapacity: 2);
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        // Read first 3 deliveries (inv-1, inv-2, inv-3 in some order)
+        var firstBatch = new HashSet<string>();
+        for (var i = 0; i < 3; i++)
+        {
+            var invoice = await listener.WaitInvoice(cts.Token);
+            firstBatch.Add(invoice.Id);
+        }
+
+        Assert.Equal(3, firstBatch.Count);
+
+        // After the clear, previously-delivered invoices can be re-delivered
+        // since they're still tracked (untrack always fails). Read at least one re-delivery.
+        var redelivered = await listener.WaitInvoice(cts.Token);
+        Assert.Contains(redelivered.Id, firstBatch);
+    }
+
     /// <summary>
     /// Wraps a real IBareBitcoinInvoiceService, throwing IOException from UntrackInvoice
     /// for a specific invoice ID to simulate disk failures.
@@ -686,6 +721,18 @@ public class BareBitcoinListenerTests : IDisposable
                 throw new IOException("Simulated disk failure");
             return inner.UntrackInvoice(invoiceId, cancellation);
         }
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+            => inner.GetTrackedInvoices(cancellation);
+    }
+
+    private sealed class AlwaysFaultyUntrackService(IBareBitcoinInvoiceService inner) : IBareBitcoinInvoiceService
+    {
+        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+            => inner.TrackInvoice(invoiceId, cancellation);
+
+        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+            => throw new IOException("Simulated persistent disk failure");
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
             => inner.GetTrackedInvoices(cancellation);

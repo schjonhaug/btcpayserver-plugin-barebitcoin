@@ -32,6 +32,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     // Guards against duplicate paid invoice delivery when UntrackInvoice fails
     private readonly HashSet<string> _deliveredPaidInvoices = new();
+    private readonly int _maxDeliveredCapacity;
 
     private bool _isDisposed;
 
@@ -60,15 +61,17 @@ public class BareBitcoinListener : ILightningInvoiceListener
     public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
         : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
+    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, int maxDeliveredCapacity = 10_000, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
+        if (maxDeliveredCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(maxDeliveredCapacity));
 
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _logger = logger;
         _maxPollConcurrency = maxPollConcurrency;
+        _maxDeliveredCapacity = maxDeliveredCapacity;
         _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _cts = new CancellationTokenSource();
         OnBeforeWrite = onBeforeWrite;
@@ -152,6 +155,15 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             await _invoices.Writer.WriteAsync(invoice, _cts.Token);
                             OnAfterWrite?.Invoke(invoice);
                             _deliveredPaidInvoices.Add(invoiceId);
+
+                            if (_deliveredPaidInvoices.Count > _maxDeliveredCapacity)
+                            {
+                                _logger.LogWarning(
+                                    "Delivered paid invoices set exceeded {Capacity}, clearing to prevent unbounded growth. " +
+                                    "This may cause duplicate delivery of recently paid invoices, which is safe",
+                                    _maxDeliveredCapacity);
+                                _deliveredPaidInvoices.Clear();
+                            }
                         }
                         if (await TryUntrackInvoice(invoiceId))
                             _deliveredPaidInvoices.Remove(invoiceId);
