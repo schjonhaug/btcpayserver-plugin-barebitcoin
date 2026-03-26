@@ -28,6 +28,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private long _writtenVersion;
     private bool _dirty;
     private bool _disposed;
+    private Exception? _lastFlushException;
+
+    /// <summary>
+    /// The exception from the most recent flush failure, or null if the last flush succeeded.
+    /// </summary>
+    public Exception? LastFlushException => Volatile.Read(ref _lastFlushException);
 
     internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
@@ -160,9 +166,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 if (version <= _writtenVersion) return;
                 await SaveToDiskAsync(json);
                 _writtenVersion = version;
+                Volatile.Write(ref _lastFlushException, null);
             }
             catch (Exception ex)
             {
+                Volatile.Write(ref _lastFlushException, ex);
                 _logger.LogError(ex, "Failed to flush tracked invoices to disk");
 
                 try
@@ -205,6 +213,21 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
         await _flushTimer.DisposeAsync();
         await FlushAsync();
+
+        if (Volatile.Read(ref _lastFlushException) != null)
+        {
+            _logger.LogWarning("Retrying final flush after initial failure during dispose");
+            await Task.Delay(100);
+            await FlushAsync();
+        }
+
+        var finalException = Volatile.Read(ref _lastFlushException);
+        if (finalException != null)
+        {
+            _logger.LogError(finalException,
+                "Final flush failed during dispose — tracked invoice state may be lost on restart");
+        }
+
         _invoiceTrackingLock.Dispose();
         _diskWriteLock.Dispose();
     }
@@ -250,7 +273,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
-    private async Task SaveToDiskAsync(string json)
+    internal virtual async Task SaveToDiskAsync(string json)
     {
         var directory = Path.GetDirectoryName(_dataFilePath);
         if (directory != null)

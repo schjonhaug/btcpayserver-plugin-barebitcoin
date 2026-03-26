@@ -1,7 +1,10 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -116,6 +119,66 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task FlushAsync_Failure_SetsLastFlushException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+        await service.FlushAsync();
+
+        Assert.NotNull(service.LastFlushException);
+        Assert.IsType<IOException>(service.LastFlushException);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task FlushAsync_Success_ClearsLastFlushException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath, failCount: 1);
+        await service.TrackInvoice("inv-1");
+
+        await service.FlushAsync(); // fails
+        Assert.NotNull(service.LastFlushException);
+
+        await service.FlushAsync(); // succeeds
+        Assert.Null(service.LastFlushException);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_FlushFailure_RetriesAndLogsError()
+    {
+        var logger = new RecordingLogger();
+        var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        await service.DisposeAsync();
+
+        Assert.NotNull(service.LastFlushException);
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Warning && e.Message.Contains("Retrying"));
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("Final flush failed"));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_FlushFailure_RetrySucceeds()
+    {
+        var logger = new RecordingLogger();
+        var service = new FailingSaveService(logger, FilePath, failCount: 1);
+        await service.TrackInvoice("inv-1");
+
+        await service.DisposeAsync();
+
+        Assert.Null(service.LastFlushException);
+        Assert.True(File.Exists(FilePath));
+        var json = File.ReadAllText(FilePath);
+        Assert.Contains("inv-1", json);
+        Assert.DoesNotContain(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("Final flush failed"));
+    }
+
+    [Fact]
     public async Task ConcurrentFlushAsync_DoesNotCorruptPersistedFile()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
@@ -194,5 +257,42 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         for (var i = 0; i < 10; i++)
             Assert.Contains($"inv-{i}", tracked);
         Assert.Equal(10, tracked.Count);
+    }
+
+    private class FailingSaveService : BareBitcoinInvoiceService
+    {
+        private int _failCount;
+
+        public FailingSaveService(ILogger logger, string dataFilePath, int failCount = int.MaxValue)
+            : base(logger, dataFilePath)
+        {
+            _failCount = failCount;
+        }
+
+        internal override async Task SaveToDiskAsync(string json)
+        {
+            if (_failCount > 0)
+            {
+                _failCount--;
+                throw new IOException("Simulated disk failure");
+            }
+            await base.SaveToDiskAsync(json);
+        }
+    }
+
+    private class RecordingLogger : ILogger
+    {
+        private readonly ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries => _entries.ToList();
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            _entries.Enqueue((logLevel, formatter(state, exception), exception));
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 }
