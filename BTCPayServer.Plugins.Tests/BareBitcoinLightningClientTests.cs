@@ -316,15 +316,19 @@ public class BareBitcoinLightningClientTests
     [Fact]
     public async Task GetInvoice_RetriesTransientError_ThenSucceeds()
     {
+        var attemptCount = 0;
         var invoiceService = new ThrowingInvoiceService();
         var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
-            attempt == 1
+        {
+            Interlocked.Increment(ref attemptCount);
+            return attempt == 1
                 ? Task.FromException<HttpResponseMessage>(
                     new HttpRequestException("connection refused"))
                 : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
                 {
                     Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
-                }));
+                });
+        });
 
         var client = CreateClient(handler, invoiceService, maxRetries: 3);
 
@@ -332,6 +336,7 @@ public class BareBitcoinLightningClientTests
 
         Assert.NotNull(result);
         Assert.Equal("inv-retry", result.Id);
+        Assert.Equal(2, attemptCount);
     }
 
     [Fact]
@@ -352,10 +357,11 @@ public class BareBitcoinLightningClientTests
 
         var client = CreateClient(handler, invoiceService, maxRetries: 3);
 
-        await Assert.ThrowsAsync<RateLimitedException>(
+        var ex = await Assert.ThrowsAsync<RateLimitedException>(
             () => client.GetInvoice("inv-long-wait"));
         Assert.Equal(1, attemptCount);
         Assert.Equal(1, client.RateLimitBackoffCount);
+        Assert.Equal(TimeSpan.FromSeconds(120), ex.RetryAfter);
     }
 
     [Fact]
