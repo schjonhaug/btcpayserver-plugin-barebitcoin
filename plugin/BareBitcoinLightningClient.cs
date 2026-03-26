@@ -236,7 +236,7 @@ public class BareBitcoinLightningClient : ILightningClient
                         _rateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + clamped;
                         Logger.LogWarning(
                             "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {Deferred}s",
-                            invoiceId, (int)ra.TotalSeconds, (int)clamped.TotalSeconds);
+                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds, (int)clamped.TotalSeconds);
                         return null;
                     }
 
