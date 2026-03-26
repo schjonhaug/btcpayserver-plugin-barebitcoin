@@ -217,6 +217,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         if (Volatile.Read(ref _lastFlushException) != null)
         {
             _logger.LogWarning("Retrying final flush after initial failure during dispose");
+            await Task.Delay(100);
             await FlushAsync();
         }
 
