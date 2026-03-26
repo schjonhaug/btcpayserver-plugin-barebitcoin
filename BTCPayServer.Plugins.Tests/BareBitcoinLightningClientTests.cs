@@ -310,6 +310,7 @@ public class BareBitcoinLightningClientTests
         var ex = await Assert.ThrowsAsync<RateLimitedException>(
             () => client.GetInvoice("inv-deferred"));
         Assert.NotNull(ex.RetryAfter);
+        Assert.True(ex.RetryAfter > TimeSpan.Zero, "RetryAfter should be positive");
         Assert.Equal(0, attemptCount);
     }
 
