@@ -138,6 +138,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             catch (Exception ex)
             {
                 Interlocked.Increment(ref _consecutiveFlushFailures);
+                Volatile.Write(ref _lastFlushException, ex);
                 _logThrottle.LogWarning(ex, "Failed to serialize tracked invoices");
                 if (!_disposed)
                     ScheduleFlush(GetFlushBackoff());
