@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,7 +67,7 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
         }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
             Logger.LogWarning("Invoice {InvoiceId} not found (404)", invoiceId);
             return null;
@@ -200,7 +201,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     invoice = await GetInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex) when (ex is HttpRequestException { StatusCode: System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden })
+                catch (Exception ex) when (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
                 {
                     throw;
                 }
