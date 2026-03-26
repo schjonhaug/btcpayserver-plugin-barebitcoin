@@ -21,6 +21,7 @@ internal class LogThrottle
     internal class ThrottleState
     {
         public long WindowStart;
+        public bool IsFirstCall = true;
         public int SuppressedCount;
         public readonly object Lock = new();
     }
@@ -46,7 +47,7 @@ internal class LogThrottle
             var now = _clock();
             var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
 
-            if (elapsed >= _suppressionWindow)
+            if (state.IsFirstCall || elapsed >= _suppressionWindow)
             {
                 // Window expired (or first call) — emit summary if anything was suppressed
                 if (state.SuppressedCount > 0)
@@ -58,6 +59,7 @@ internal class LogThrottle
 
                 // Log the actual warning and start a new window
                 _logger.LogWarning(ex, messageTemplate, args);
+                state.IsFirstCall = false;
                 state.WindowStart = now;
                 state.SuppressedCount = 0;
             }
