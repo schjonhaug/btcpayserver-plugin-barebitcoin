@@ -124,6 +124,20 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task CreateInvoice_PropagatesOperationCanceledException_FromTrackInvoice()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new OperationCanceledException("token cancelled"));
+
+        var handler = new FakeMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => client.CreateInvoice(
+                new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1))));
+    }
+
+    [Fact]
     public async Task GetInvoice_LogsWarning_WhenTrackInvoiceThrowsIOException()
     {
         var logger = new CapturingLogger();
