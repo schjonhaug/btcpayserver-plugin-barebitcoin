@@ -1,6 +1,8 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Xunit;
 
@@ -112,5 +114,96 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         Assert.True(File.Exists(FilePath));
         var json = File.ReadAllText(FilePath);
         Assert.Contains("inv-1", json);
+    }
+
+    [Fact]
+    public async Task FlushAsync_Failure_SetsLastFlushException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+        await service.FlushAsync();
+
+        Assert.NotNull(service.LastFlushException);
+        Assert.IsType<IOException>(service.LastFlushException);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Error);
+    }
+
+    [Fact]
+    public async Task FlushAsync_Success_ClearsLastFlushException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath, failCount: 1);
+        await service.TrackInvoice("inv-1");
+
+        await service.FlushAsync(); // fails
+        Assert.NotNull(service.LastFlushException);
+
+        await service.FlushAsync(); // succeeds
+        Assert.Null(service.LastFlushException);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_FlushFailure_RetriesAndLogsError()
+    {
+        var logger = new RecordingLogger();
+        var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        await service.DisposeAsync();
+
+        Assert.NotNull(service.LastFlushException);
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Warning && e.Message.Contains("Retrying"));
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("Final flush failed"));
+    }
+
+    [Fact]
+    public async Task DisposeAsync_FlushFailure_RetrySucceeds()
+    {
+        var logger = new RecordingLogger();
+        var service = new FailingSaveService(logger, FilePath, failCount: 1);
+        await service.TrackInvoice("inv-1");
+
+        await service.DisposeAsync();
+
+        Assert.Null(service.LastFlushException);
+        Assert.True(File.Exists(FilePath));
+    }
+
+    private class FailingSaveService : BareBitcoinInvoiceService
+    {
+        private int _failCount;
+
+        public FailingSaveService(ILogger logger, string dataFilePath, int failCount = int.MaxValue)
+            : base(logger, dataFilePath)
+        {
+            _failCount = failCount;
+        }
+
+        internal override async Task SaveToDiskAsync(string json)
+        {
+            if (_failCount > 0)
+            {
+                _failCount--;
+                throw new IOException("Simulated disk failure");
+            }
+            await base.SaveToDiskAsync(json);
+        }
+    }
+
+    private class RecordingLogger : ILogger
+    {
+        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add((logLevel, formatter(state, exception), exception));
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 }
