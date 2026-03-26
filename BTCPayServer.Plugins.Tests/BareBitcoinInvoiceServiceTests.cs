@@ -128,6 +128,9 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
             tasks.Add(service.FlushAsync());
         for (var i = 20; i < 30; i++)
             tasks.Add(service.TrackInvoice($"inv-{i}"));
+        // Untrack some of the initial invoices concurrently
+        for (var i = 10; i < 15; i++)
+            tasks.Add(service.UntrackInvoice($"inv-{i}"));
         await Task.WhenAll(tasks);
 
         await service.FlushAsync();
@@ -135,9 +138,14 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         var tracked = await service2.GetTrackedInvoices();
 
-        for (var i = 0; i < 30; i++)
+        // inv-0..9 tracked, inv-10..14 untracked, inv-15..29 tracked
+        for (var i = 0; i < 10; i++)
             Assert.Contains($"inv-{i}", tracked);
-        Assert.Equal(30, tracked.Count);
+        for (var i = 10; i < 15; i++)
+            Assert.DoesNotContain($"inv-{i}", tracked);
+        for (var i = 15; i < 30; i++)
+            Assert.Contains($"inv-{i}", tracked);
+        Assert.Equal(25, tracked.Count);
     }
 
     [Fact]
