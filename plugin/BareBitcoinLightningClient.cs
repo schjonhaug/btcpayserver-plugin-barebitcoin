@@ -231,10 +231,12 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     if (ra > maxRateLimitDelay)
                     {
-                        _rateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + ra;
+                        var maxBackoff = TimeSpan.FromHours(1);
+                        var clamped = ra > maxBackoff ? maxBackoff : ra;
+                        _rateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + clamped;
                         Logger.LogWarning(
-                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {RetryAfter}s",
-                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
+                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {Deferred}s",
+                            invoiceId, (int)ra.TotalSeconds, (int)clamped.TotalSeconds);
                         return null;
                     }
 
