@@ -278,6 +278,14 @@ public class BareBitcoinLightningClient : ILightningClient
             var isPendingOnly = request.PendingOnly.GetValueOrDefault(false);
 
             var trackedInvoices = await _invoiceService.GetTrackedInvoices(cancellation);
+
+            // Prune backoff entries for invoices no longer tracked
+            foreach (var key in _rateLimitBackoff.Keys)
+            {
+                if (!trackedInvoices.Contains(key))
+                    _rateLimitBackoff.TryRemove(key, out _);
+            }
+
             await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
             {
                 MaxDegreeOfParallelism = _maxPollConcurrency,
