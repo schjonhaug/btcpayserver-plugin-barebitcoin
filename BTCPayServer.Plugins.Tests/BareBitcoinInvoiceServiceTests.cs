@@ -298,24 +298,25 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     [Fact]
     public void GetFlushBackoff_ProducesExponentialDelaysCappedAtMax()
     {
-        // Verify the backoff progression formula: min(1 * 2^failures, 30) seconds
+        // Backoff formula: min(1 * 2^(failures-1), 30) seconds
+        // Counter is incremented before computing delay, so failures is 1-based.
         var flush = BareBitcoinInvoiceService.FlushInterval.TotalSeconds;
         var max = BareBitcoinInvoiceService.MaxFlushBackoff.TotalSeconds;
 
-        // failures=0 → 1*2^0 = 1s (used for first retry after increment)
-        Assert.Equal(1, Math.Min(flush * Math.Pow(2, 0), max));
-        // failures=1 → 1*2^1 = 2s
-        Assert.Equal(2, Math.Min(flush * Math.Pow(2, 1), max));
-        // failures=2 → 1*2^2 = 4s
-        Assert.Equal(4, Math.Min(flush * Math.Pow(2, 2), max));
-        // failures=3 → 1*2^3 = 8s
-        Assert.Equal(8, Math.Min(flush * Math.Pow(2, 3), max));
-        // failures=4 → 1*2^4 = 16s
-        Assert.Equal(16, Math.Min(flush * Math.Pow(2, 4), max));
-        // failures=5 → 1*2^5 = 32 → capped at 30s
-        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 5), max));
-        // failures=10 → 1*2^10 = 1024 → capped at 30s
-        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 10), max));
+        // failures=1 (first failure) → 2^0 = 1s
+        Assert.Equal(1, Math.Min(flush * Math.Pow(2, 1 - 1), max));
+        // failures=2 → 2^1 = 2s
+        Assert.Equal(2, Math.Min(flush * Math.Pow(2, 2 - 1), max));
+        // failures=3 → 2^2 = 4s
+        Assert.Equal(4, Math.Min(flush * Math.Pow(2, 3 - 1), max));
+        // failures=4 → 2^3 = 8s
+        Assert.Equal(8, Math.Min(flush * Math.Pow(2, 4 - 1), max));
+        // failures=5 → 2^4 = 16s
+        Assert.Equal(16, Math.Min(flush * Math.Pow(2, 5 - 1), max));
+        // failures=6 → 2^5 = 32 → capped at 30s
+        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 6 - 1), max));
+        // failures=100 → exponent capped at 10 → 2^10 = 1024 → capped at 30s
+        Assert.Equal(30, Math.Min(flush * Math.Pow(2, Math.Min(100 - 1, 10)), max));
     }
 
     [Fact]
