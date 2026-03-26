@@ -322,12 +322,16 @@ public class LogThrottleTests
         var window = TimeSpan.FromMinutes(5);
         var throttle = new LogThrottle(logger, window, () => Volatile.Read(ref now));
 
-        // Fill past the eviction threshold with stale entries
+        // Fill past the eviction threshold with stale entries, each with a suppressed call
         for (var i = 0; i < 20; i++)
-            throttle.Log(LogLevel.Warning, null, $"Template{i} {{Id}}", "inv");
+        {
+            throttle.Log(LogLevel.Warning, null, $"Stale{i} {{Id}}", "inv");
+            throttle.Log(LogLevel.Warning, null, $"Stale{i} {{Id}}", "inv"); // suppressed
+        }
 
         // Advance past the window so all entries are stale
         Interlocked.Exchange(ref now, now + (long)(window.TotalSeconds * Stopwatch.Frequency));
+        logger.Entries.Clear();
 
         // Hammer eviction from many threads simultaneously
         var barrier = new Barrier(participantCount: 8);
@@ -345,17 +349,24 @@ public class LogThrottleTests
 
         Task.WaitAll(tasks);
 
-        // All tasks completed without exceptions; stale entries were evicted and
-        // only the concurrently-added templates remain (8 threads × 50 = 400 templates,
-        // but eviction keeps removing stale ones, so count should stay bounded).
+        // All tasks completed without exceptions; state is consistent
         Assert.True(throttle.StateCount > 0);
         Assert.True(throttle.StateCount <= 400,
             $"Expected at most 400 entries but found {throttle.StateCount}");
 
-        // Verify no duplicate summary logs (each suppressed-count message should appear at most once per template)
-        var summaries = logger.Entries.FindAll(e => e.Message.Contains("Suppressed"));
-        var uniqueSummaryTemplates = new HashSet<string>(summaries.ConvertAll(e => e.Message));
-        Assert.Equal(uniqueSummaryTemplates.Count, summaries.Count);
+        // Each stale template had SuppressedCount=1, so exactly 20 summary logs should be emitted.
+        // No duplicates: extract the template name from each summary and verify uniqueness.
+        var summaries = logger.Entries.FindAll(e => e.Message.Contains("Suppressed 1"));
+        Assert.Equal(20, summaries.Count);
+
+        var templateNames = summaries.ConvertAll(e =>
+        {
+            // Extract template name from: Suppressed 1 repeated message(s) for "Stale3 {Id}" ...
+            var start = e.Message.IndexOf('"') + 1;
+            var end = e.Message.IndexOf('"', start);
+            return e.Message.Substring(start, end - start);
+        });
+        Assert.Equal(20, new HashSet<string>(templateNames).Count);
     }
 
     [Theory]
