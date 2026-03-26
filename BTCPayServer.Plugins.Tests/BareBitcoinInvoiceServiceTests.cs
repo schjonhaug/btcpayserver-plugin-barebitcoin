@@ -1,5 +1,7 @@
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
@@ -195,12 +197,14 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
     private class RecordingLogger : ILogger
     {
-        public List<(LogLevel Level, string Message, Exception? Exception)> Entries { get; } = new();
+        private readonly ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> _entries = new();
+
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries => _entries.ToList();
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
             Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            Entries.Add((logLevel, formatter(state, exception), exception));
+            _entries.Enqueue((logLevel, formatter(state, exception), exception));
         }
 
         public bool IsEnabled(LogLevel logLevel) => true;
