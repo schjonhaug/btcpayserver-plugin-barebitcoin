@@ -217,6 +217,50 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_PropagatesOperationCanceledException()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new ThrowingMessageHandler(new OperationCanceledException("timed out"));
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => client.GetInvoice("inv-timeout"));
+    }
+
+    [Fact]
+    public async Task GetInvoice_ReturnsNull_WhenInvoiceFieldIsMissing()
+    {
+        var json = """
+            {
+                "status": "INVOICE_STATUS_UNPAID"
+            }
+            """;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new FakeMessageHandler(json);
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.GetInvoice("inv-missing");
+        Assert.Null(result);
+    }
+
+    [Fact]
+    public async Task GetInvoice_PropagatesFormatException_FromMalformedBolt11()
+    {
+        var json = """
+            {
+                "invoice": "not-a-valid-bolt11",
+                "status": "INVOICE_STATUS_UNPAID"
+            }
+            """;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new FakeMessageHandler(json);
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<FormatException>(
+            () => client.GetInvoice("inv-bad-bolt11"));
+    }
+
+    [Fact]
     public async Task GetInvoice_PropagatesJsonException()
     {
         var invoiceService = new ThrowingInvoiceService();
