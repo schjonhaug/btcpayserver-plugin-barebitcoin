@@ -16,6 +16,7 @@ internal class LogThrottle
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
     private readonly int _maxEntries;
+    private readonly object _evictionLock = new();
     private readonly ConcurrentDictionary<string, ThrottleState> _states = new();
 
     internal class ThrottleState
@@ -46,27 +47,40 @@ internal class LogThrottle
     {
         if (!_logger.IsEnabled(logLevel)) return;
 
-        // Evict oldest entry if at capacity and this is a new template
-        if (_states.Count >= _maxEntries && !_states.ContainsKey(messageTemplate))
+        ThrottleState state;
+
+        // Fast path: template already tracked — no eviction needed
+        if (_states.TryGetValue(messageTemplate, out state!))
+            goto throttle;
+
+        // Slow path: new template — serialize eviction + add to enforce cap
+        lock (_evictionLock)
         {
-            string? oldestKey = null;
-            long oldestWindow = long.MaxValue;
-            foreach (var kvp in _states)
+            // Re-check after acquiring lock (another thread may have added it)
+            if (!_states.TryGetValue(messageTemplate, out state!))
             {
-                if (kvp.Value.WindowStart < oldestWindow)
+                if (_states.Count >= _maxEntries)
                 {
-                    oldestWindow = kvp.Value.WindowStart;
-                    oldestKey = kvp.Key;
+                    string? oldestKey = null;
+                    long oldestWindow = long.MaxValue;
+                    foreach (var kvp in _states)
+                    {
+                        if (kvp.Value.WindowStart < oldestWindow)
+                        {
+                            oldestWindow = kvp.Value.WindowStart;
+                            oldestKey = kvp.Key;
+                        }
+                    }
+                    if (oldestKey != null)
+                        _states.TryRemove(oldestKey, out _);
                 }
+
+                state = new ThrottleState { WindowStart = 0 };
+                _states[messageTemplate] = state;
             }
-            if (oldestKey != null)
-                _states.TryRemove(oldestKey, out _);
         }
 
-        var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
-        {
-            WindowStart = 0
-        });
+        throttle:
 
         lock (state.Lock)
         {

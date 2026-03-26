@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -237,6 +240,27 @@ public class LogThrottleTests
 
         Assert.NotNull(throttle.GetState("Template A"));
         Assert.NotNull(throttle.GetState("Template B"));
+    }
+
+    [Fact]
+    public void MaxEntries_ConcurrentTemplates_NeverExceedsCap()
+    {
+        const int cap = 10;
+        const int templateCount = 50;
+        var throttle = new LogThrottle(_logger, _window, () => _now, maxEntries: cap);
+        var barrier = new Barrier(templateCount);
+
+        var tasks = Enumerable.Range(0, templateCount).Select(i => Task.Run(() =>
+        {
+            barrier.SignalAndWait(TimeSpan.FromSeconds(5));
+            throttle.LogWarning(null, $"Template {i}");
+        })).ToArray();
+
+        Task.WaitAll(tasks);
+
+        // Count surviving entries — must never exceed the cap
+        int count = Enumerable.Range(0, templateCount).Count(i => throttle.GetState($"Template {i}") != null);
+        Assert.True(count <= cap, $"Expected at most {cap} entries but found {count}");
     }
 
     [Theory]
