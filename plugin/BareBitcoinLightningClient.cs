@@ -30,13 +30,14 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly int _maxPollConcurrency;
+    private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;
@@ -48,6 +49,8 @@ public class BareBitcoinLightningClient : ILightningClient
         _invoiceService = invoiceService;
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
+        if (maxRetries is < 0 or > 10) throw new ArgumentOutOfRangeException(nameof(maxRetries));
+        _maxRetries = maxRetries;
 
         _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
@@ -179,6 +182,48 @@ public class BareBitcoinLightningClient : ILightningClient
         return await GetInvoice(paymentHash.ToString(), cancellation);
     }
 
+    private static bool IsTransientHttpError(HttpRequestException ex)
+    {
+        if (ex.StatusCode is null) return true;
+        if (ex.StatusCode == HttpStatusCode.TooManyRequests) return true;
+        if ((int)ex.StatusCode >= 500) return true;
+        return false;
+    }
+
+    private async Task<LightningInvoice?> GetInvoiceWithRetry(string invoiceId, CancellationToken cancellation)
+    {
+        const int baseDelayMs = 200;
+        var maxDelay = TimeSpan.FromSeconds(30);
+
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await GetInvoice(invoiceId, cancellation);
+            }
+            catch (HttpRequestException ex) when (
+                ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex) when (
+                attempt < _maxRetries && IsTransientHttpError(ex))
+            {
+                var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
+                var delay = ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero
+                    ? ra
+                    : backoff;
+                if (delay > maxDelay) delay = maxDelay;
+
+                Logger.LogWarning(ex,
+                    "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
+                    invoiceId, attempt + 1, _maxRetries, (int)delay.TotalMilliseconds);
+
+                await Task.Delay(delay, cancellation);
+            }
+        }
+    }
+
     public async Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListInvoices()");
@@ -204,7 +249,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 LightningInvoice? invoice;
                 try
                 {
-                    invoice = await GetInvoice(invoiceId, token);
+                    invoice = await GetInvoiceWithRetry(invoiceId, token);
                 }
                 catch (Exception ex) when (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
                 {

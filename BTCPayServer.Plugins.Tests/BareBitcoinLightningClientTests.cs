@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Net;
@@ -44,7 +45,8 @@ public class BareBitcoinLightningClientTests
     private static BareBitcoinLightningClient CreateClient(
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
-        ILogger? logger = null)
+        ILogger? logger = null,
+        int maxRetries = 0)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
@@ -55,7 +57,8 @@ public class BareBitcoinLightningClientTests
             network: Network.Main,
             httpClient: httpClient,
             logger: logger ?? NullLogger.Instance,
-            invoiceService: invoiceService);
+            invoiceService: invoiceService,
+            maxRetries: maxRetries);
     }
 
     [Fact]
@@ -464,6 +467,215 @@ public class BareBitcoinLightningClientTests
             var invoiceId = segments[^1];
             return handler(invoiceId);
         }
+    }
+
+    private sealed class CountingPerInvoiceHandler : HttpMessageHandler
+    {
+        private readonly Func<string, int, Task<HttpResponseMessage>> _handler;
+        private readonly ConcurrentDictionary<string, int> _attempts = new();
+
+        public CountingPerInvoiceHandler(Func<string, int, Task<HttpResponseMessage>> handler)
+            => _handler = handler;
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            var segments = request.RequestUri!.AbsolutePath.Split('/');
+            var invoiceId = segments[^1];
+            var attempt = _attempts.AddOrUpdate(invoiceId, 1, (_, prev) => prev + 1);
+            return _handler(invoiceId, attempt);
+        }
+    }
+
+    // --- Retry tests ---
+
+    [Fact]
+    public async Task ListInvoices_RetriesTransientError_ThenSucceeds()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-retry" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+            attempt == 1
+                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("server error")
+                })
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+                }));
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-retry", result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_RetriesNetworkError_ThenSucceeds()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-net" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+            attempt == 1
+                ? Task.FromException<HttpResponseMessage>(new HttpRequestException("connection refused"))
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+                }));
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-net", result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_ExhaustsRetries_ThenSkips()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", "inv-always-fail" });
+
+        var failAttemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((invoiceId, _) =>
+        {
+            if (invoiceId == "inv-always-fail")
+            {
+                Interlocked.Increment(ref failAttemptCount);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+                {
+                    Content = new StringContent("server error")
+                });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 2);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-ok", result[0].Id);
+        Assert.Equal(3, failAttemptCount); // 1 initial + 2 retries
+    }
+
+    [Fact]
+    public async Task ListInvoices_DoesNotRetryAuthErrors()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-auth-fail" });
+
+        var attemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized));
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.ListInvoices(new ListInvoicesParams()));
+
+        Assert.Equal(1, attemptCount);
+    }
+
+    [Fact]
+    public async Task ListInvoices_DoesNotRetryParsingErrors()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-bad-json" });
+
+        var attemptCount = 0;
+        var handler = new PerInvoiceHandler(_ =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("not valid json {{{", Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Empty(result);
+        Assert.Equal(1, attemptCount);
+    }
+
+    [Fact]
+    public async Task ListInvoices_Retries429_ThenSucceeds()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-rate-limited" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+        {
+            if (attempt == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromMilliseconds(50));
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-rate-limited", result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_HandlesNegativeRetryAfter_FallsBackToExponentialBackoff()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-stale-header" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+        {
+            if (attempt == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                // Set a Retry-After date in the past, which would produce a negative TimeSpan
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                    DateTimeOffset.UtcNow.AddSeconds(-10));
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-stale-header", result[0].Id);
     }
 
     private sealed class CapturingLogger : ILogger

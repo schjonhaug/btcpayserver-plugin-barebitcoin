@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -205,8 +206,22 @@ public class BareBitcoinApiService
             
             if (!response.IsSuccessStatusCode)
             {
-                _logger.LogError("Request failed with status {StatusCode}. Response body: {Body}", 
+                _logger.LogError("Request failed with status {StatusCode}. Response body: {Body}",
                     response.StatusCode, responseContent);
+
+                if (response.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    TimeSpan? retryAfter = null;
+                    if (response.Headers.RetryAfter?.Delta is TimeSpan delta)
+                        retryAfter = delta;
+                    else if (response.Headers.RetryAfter?.Date is DateTimeOffset date)
+                        retryAfter = date - DateTimeOffset.UtcNow;
+
+                    throw new RateLimitedException(
+                        "Rate limited (429)",
+                        retryAfter);
+                }
+
                 response.EnsureSuccessStatusCode();
             }
             
