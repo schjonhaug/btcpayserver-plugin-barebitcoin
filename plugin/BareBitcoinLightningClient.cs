@@ -193,6 +193,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private async Task<LightningInvoice?> GetInvoiceWithRetry(string invoiceId, CancellationToken cancellation)
     {
         const int baseDelayMs = 200;
+        var maxDelay = TimeSpan.FromSeconds(30);
 
         for (var attempt = 0; ; attempt++)
         {
@@ -212,6 +213,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 var delay = ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero
                     ? ra
                     : backoff;
+                if (delay > maxDelay) delay = maxDelay;
 
                 Logger.LogWarning(ex,
                     "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",

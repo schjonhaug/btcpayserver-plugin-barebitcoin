@@ -567,14 +567,20 @@ public class BareBitcoinLightningClientTests
         var invoiceService = new ThrowingInvoiceService(
             trackedInvoices: new[] { "inv-auth-fail" });
 
-        var handler = new CountingPerInvoiceHandler((_, _) =>
-            Task.FromException<HttpResponseMessage>(
-                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)));
+        var attemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized));
+        });
 
         var client = CreateClient(handler, invoiceService, maxRetries: 3);
 
         await Assert.ThrowsAsync<HttpRequestException>(
             () => client.ListInvoices(new ListInvoicesParams()));
+
+        Assert.Equal(1, attemptCount);
     }
 
     [Fact]
