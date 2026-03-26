@@ -415,6 +415,7 @@ public class BareBitcoinLightningClientTests
         Assert.NotNull(result);
         Assert.Equal("inv-retry-429", result.Id);
         Assert.Equal(2, attemptCount);
+        Assert.Equal(0, client.RateLimitBackoffCount);
     }
 
     private sealed class FakeMessageHandler(string responseBody) : HttpMessageHandler
