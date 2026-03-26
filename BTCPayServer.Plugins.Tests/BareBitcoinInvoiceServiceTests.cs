@@ -172,6 +172,8 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         Assert.Null(service.LastFlushException);
         Assert.True(File.Exists(FilePath));
+        var json = File.ReadAllText(FilePath);
+        Assert.Contains("inv-1", json);
         Assert.DoesNotContain(logger.Entries, e =>
             e.Level == LogLevel.Error && e.Message.Contains("Final flush failed"));
     }
