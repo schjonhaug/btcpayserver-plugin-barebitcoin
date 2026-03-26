@@ -158,8 +158,9 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             OnAfterWrite?.Invoke(invoice);
                             if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
                             {
-                                var evictCount = Math.Max(1, _maxDeliveredCapacity / 10);
-                                for (var i = 0; i < evictCount && _deliveredPaidInvoicesOrder.First != null; i++)
+                                var target = Math.Max(1, _maxDeliveredCapacity / 10);
+                                var evicted = 0;
+                                for (; evicted < target && _deliveredPaidInvoicesOrder.First != null; evicted++)
                                 {
                                     var oldest = _deliveredPaidInvoicesOrder.First!;
                                     _deliveredPaidInvoices.Remove(oldest.Value);
@@ -168,7 +169,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
                                 _logger.LogDebug(
                                     "Evicted {EvictedCount} oldest entries from delivered paid invoices set (capacity: {Capacity})",
-                                    evictCount, _maxDeliveredCapacity);
+                                    evicted, _maxDeliveredCapacity);
                             }
 
                             var node = _deliveredPaidInvoicesOrder.AddLast(invoiceId);

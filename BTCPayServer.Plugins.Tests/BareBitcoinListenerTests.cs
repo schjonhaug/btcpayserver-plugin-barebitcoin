@@ -703,20 +703,15 @@ public class BareBitcoinListenerTests : IDisposable
             channelCapacity: 10, maxDeliveredCapacity: 2);
         using var cts = new CancellationTokenSource(TestTimeout);
 
-        // Read first 3 deliveries (inv-1, inv-2, inv-3 in some order)
-        var firstBatch = new HashSet<string>();
-        for (var i = 0; i < 3; i++)
-        {
-            var invoice = await listener.WaitInvoice(cts.Token);
-            firstBatch.Add(invoice.Id);
-        }
+        // Read first 3 deliveries in order; the first delivered is the oldest in the FIFO
+        var firstDelivered = (await listener.WaitInvoice(cts.Token)).Id;
+        await listener.WaitInvoice(cts.Token);
+        await listener.WaitInvoice(cts.Token);
 
-        Assert.Equal(3, firstBatch.Count);
-
-        // After FIFO eviction, the oldest entry was evicted and can be re-delivered
-        // since it's still tracked (untrack always fails).
+        // After FIFO eviction, the oldest (first delivered) entry was evicted and can be
+        // re-delivered since it's still tracked (untrack always fails).
         var redelivered = await listener.WaitInvoice(cts.Token);
-        Assert.Contains(redelivered.Id, firstBatch);
+        Assert.Equal(firstDelivered, redelivered.Id);
     }
 
     /// <summary>
