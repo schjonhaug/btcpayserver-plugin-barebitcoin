@@ -542,16 +542,22 @@ public class BareBitcoinLightningClientTests
         var invoiceService = new ThrowingInvoiceService(
             trackedInvoices: new[] { "inv-ok", "inv-always-fail" });
 
+        var failAttemptCount = 0;
         var handler = new CountingPerInvoiceHandler((invoiceId, _) =>
-            invoiceId == "inv-always-fail"
-                ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
+        {
+            if (invoiceId == "inv-always-fail")
+            {
+                Interlocked.Increment(ref failAttemptCount);
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError)
                 {
                     Content = new StringContent("server error")
-                })
-                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-                {
-                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
-                }));
+                });
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
 
         var client = CreateClient(handler, invoiceService, maxRetries: 2);
 
@@ -559,6 +565,7 @@ public class BareBitcoinLightningClientTests
 
         Assert.Single(result);
         Assert.Equal("inv-ok", result[0].Id);
+        Assert.Equal(3, failAttemptCount); // 1 initial + 2 retries
     }
 
     [Fact]
