@@ -35,9 +35,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
-        _flushTimer = new Timer(_ =>
+        _flushTimer = new Timer(async _ =>
         {
-            try { _ = FlushAsync(); }
+            try { await FlushAsync().ConfigureAwait(false); }
             catch (Exception ex) { _logger.LogError(ex, "Unhandled exception in flush timer callback"); }
         }, null, Timeout.Infinite, Timeout.Infinite);
         LoadFromDisk();
