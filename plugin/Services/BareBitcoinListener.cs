@@ -30,8 +30,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private readonly ILogger _logger;
     private readonly LogThrottle _persistenceWarningThrottle;
 
-    // Guards against duplicate paid invoice delivery when UntrackInvoice fails
-    private readonly HashSet<string> _deliveredPaidInvoices = new();
+    // Guards against duplicate paid invoice delivery when UntrackInvoice fails.
+    // LinkedList tracks insertion order for FIFO eviction; Dictionary provides O(1) lookup and removal.
+    private readonly LinkedList<string> _deliveredPaidInvoicesOrder = new();
+    private readonly Dictionary<string, LinkedListNode<string>> _deliveredPaidInvoices = new();
     private readonly int _maxDeliveredCapacity;
 
     private bool _isDisposed;
@@ -141,14 +143,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
                         if (await TryUntrackInvoice(invoiceId))
-                            _deliveredPaidInvoices.Remove(invoiceId);
+                            RemoveDeliveredInvoice(invoiceId);
                         continue;
                     }
 
                     _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
-                        if (!_deliveredPaidInvoices.Contains(invoiceId))
+                        if (!_deliveredPaidInvoices.ContainsKey(invoiceId))
                         {
                             _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
                             OnBeforeWrite?.Invoke(invoice);
@@ -156,23 +158,31 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             OnAfterWrite?.Invoke(invoice);
                             if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
                             {
-                                _persistenceWarningThrottle.LogWarning(null,
-                                    "Delivered paid invoices set reached {Capacity}, clearing to prevent unbounded growth. " +
-                                    "This may cause duplicate delivery of recently paid invoices, which is safe",
-                                    _maxDeliveredCapacity);
-                                _deliveredPaidInvoices.Clear();
+                                var target = Math.Max(1, _maxDeliveredCapacity / 10);
+                                var evicted = 0;
+                                for (; evicted < target && _deliveredPaidInvoicesOrder.First != null; evicted++)
+                                {
+                                    var oldest = _deliveredPaidInvoicesOrder.First!;
+                                    _deliveredPaidInvoices.Remove(oldest.Value);
+                                    _deliveredPaidInvoicesOrder.RemoveFirst();
+                                }
+
+                                _logger.LogDebug(
+                                    "Evicted {EvictedCount} oldest entries from delivered paid invoices set (capacity: {Capacity})",
+                                    evicted, _maxDeliveredCapacity);
                             }
 
-                            _deliveredPaidInvoices.Add(invoiceId);
+                            var node = _deliveredPaidInvoicesOrder.AddLast(invoiceId);
+                            _deliveredPaidInvoices[invoiceId] = node;
                         }
                         if (await TryUntrackInvoice(invoiceId))
-                            _deliveredPaidInvoices.Remove(invoiceId);
+                            RemoveDeliveredInvoice(invoiceId);
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has expired, removing from tracking list", invoiceId);
                         if (await TryUntrackInvoice(invoiceId))
-                            _deliveredPaidInvoices.Remove(invoiceId);
+                            RemoveDeliveredInvoice(invoiceId);
                     }
                 }
 
@@ -232,6 +242,12 @@ public class BareBitcoinListener : ILightningInvoiceListener
                 }
             }
         }
+    }
+
+    private void RemoveDeliveredInvoice(string invoiceId)
+    {
+        if (_deliveredPaidInvoices.Remove(invoiceId, out var node))
+            _deliveredPaidInvoicesOrder.Remove(node);
     }
 
     private async Task<bool> TryUntrackInvoice(string invoiceId)
