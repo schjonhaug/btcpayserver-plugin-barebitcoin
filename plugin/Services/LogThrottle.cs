@@ -25,6 +25,7 @@ internal class LogThrottle
 
     public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<DateTimeOffset>? clock = null)
     {
+        if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
         _clock = clock ?? (() => DateTimeOffset.UtcNow);

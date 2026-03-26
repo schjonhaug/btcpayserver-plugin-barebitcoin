@@ -115,6 +115,15 @@ public class LogThrottleTests
         Assert.DoesNotContain("Suppressed", _logger.Entries[1].Message);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonPositiveWindow(int seconds)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new LogThrottle(_logger, TimeSpan.FromSeconds(seconds)));
+    }
+
     private class RecordingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
