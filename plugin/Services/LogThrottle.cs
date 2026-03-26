@@ -8,8 +8,8 @@ using Microsoft.Extensions.Logging;
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
-/// Throttles repeated log messages by message template, logging the first occurrence
-/// immediately and suppressing duplicates for a configurable window.
+/// Throttles repeated log messages by log level and message template, logging the first
+/// occurrence immediately and suppressing duplicates for a configurable window.
 /// </summary>
 internal class LogThrottle
 {
@@ -18,7 +18,7 @@ internal class LogThrottle
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
-    private readonly ConcurrentDictionary<string, ThrottleState> _states = new();
+    private readonly ConcurrentDictionary<(LogLevel, string), ThrottleState> _states = new();
 
     internal class ThrottleState
     {
@@ -47,15 +47,15 @@ internal class LogThrottle
 
     /// <summary>
     /// Logs a message at the specified level, throttling repeated calls with the same
-    /// <paramref name="messageTemplate"/>. The template should be a static string literal.
-    /// Dynamic templates are tolerated—stale entries are evicted—but active-window growth
-    /// is unbounded; prefer static templates.
+    /// (<paramref name="logLevel"/>, <paramref name="messageTemplate"/>) pair. The template
+    /// should be a static string literal. Dynamic templates are tolerated—stale entries are
+    /// evicted—but active-window growth is unbounded; prefer static templates.
     /// </summary>
     public void Log(LogLevel logLevel, Exception? ex, string messageTemplate, params object[] args)
     {
         if (!_logger.IsEnabled(logLevel)) return;
 
-        var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
+        var state = _states.GetOrAdd((logLevel, messageTemplate), _ => new ThrottleState
         {
             WindowStart = 0
         });
@@ -110,14 +110,15 @@ internal class LogThrottle
                     // avoiding accidental removal of a concurrently recreated entry.
                     // Only the thread that successfully removes the entry emits the summary,
                     // preventing duplicate logs under concurrent eviction.
-                    if (!((ICollection<KeyValuePair<string, ThrottleState>>)_states).Remove(kvp))
+                    if (!((ICollection<KeyValuePair<(LogLevel, string), ThrottleState>>)_states).Remove(kvp))
                         continue;
 
                     if (state.SuppressedCount > 0)
                     {
-                        _logger.LogWarning(
+                        var (level, template) = kvp.Key;
+                        _logger.Log(level,
                             "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
-                            state.SuppressedCount, kvp.Key, _suppressionWindow);
+                            state.SuppressedCount, template, _suppressionWindow);
                     }
                 }
             }
@@ -137,11 +138,11 @@ internal class LogThrottle
         => Log(LogLevel.Error, ex, messageTemplate, args);
 
     /// <summary>
-    /// Returns the current state for a given message template (for testing).
+    /// Returns the current throttle state for a given log level and message template (for testing).
     /// </summary>
-    internal ThrottleState? GetState(string messageTemplate)
+    internal ThrottleState? GetState(LogLevel logLevel, string messageTemplate)
     {
-        _states.TryGetValue(messageTemplate, out var state);
+        _states.TryGetValue((logLevel, messageTemplate), out var state);
         return state;
     }
 
