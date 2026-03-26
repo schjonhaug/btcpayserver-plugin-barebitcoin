@@ -129,7 +129,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         Assert.NotNull(service.LastFlushException);
         Assert.IsType<IOException>(service.LastFlushException);
-        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Error);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
     }
 
     [Fact]
@@ -288,6 +288,92 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         for (var i = 0; i < 10; i++)
             Assert.Contains($"inv-{i}", tracked);
         Assert.Equal(10, tracked.Count);
+    }
+
+    [Fact]
+    public async Task FlushAsync_BacksOff_OnPersistentDiskError()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        Assert.Equal(0, service.ConsecutiveFlushFailures);
+
+        await service.FlushAsync();
+        Assert.Equal(1, service.ConsecutiveFlushFailures);
+
+        await service.FlushAsync();
+        Assert.Equal(2, service.ConsecutiveFlushFailures);
+
+        await service.FlushAsync();
+        Assert.Equal(3, service.ConsecutiveFlushFailures);
+    }
+
+    [Fact]
+    public async Task FlushAsync_ResetsBackoff_AfterSuccess()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath, failCount: 2);
+        await service.TrackInvoice("inv-1");
+
+        // Build up failures
+        await service.FlushAsync();
+        await service.FlushAsync();
+        Assert.Equal(2, service.ConsecutiveFlushFailures);
+
+        // Successful flush should reset the counter
+        await service.FlushAsync();
+        Assert.Equal(0, service.ConsecutiveFlushFailures);
+    }
+
+    [Fact]
+    public async Task GetFlushBackoff_ProducesExponentialDelaysCappedAtMax()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        // After 1st failure → exponent 0 → 1s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(1), service.GetFlushBackoff());
+
+        // After 2nd failure → exponent 1 → 2s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(2), service.GetFlushBackoff());
+
+        // After 3rd failure → exponent 2 → 4s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(4), service.GetFlushBackoff());
+
+        // After 4th failure → exponent 3 → 8s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(8), service.GetFlushBackoff());
+
+        // After 5th failure → exponent 4 → 16s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(16), service.GetFlushBackoff());
+
+        // After 6th failure → exponent 5 → 32 → capped at 30s
+        await service.FlushAsync();
+        Assert.Equal(BareBitcoinInvoiceService.MaxFlushBackoff, service.GetFlushBackoff());
+    }
+
+    [Fact]
+    public async Task FlushAsync_ThrottlesLogs_OnRepeatedFailure()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        // Flush many times — log throttle should suppress most messages
+        for (var i = 0; i < 10; i++)
+            await service.FlushAsync();
+
+        // First call logs a warning, subsequent calls within the 5-minute window are suppressed.
+        var flushWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains("Failed to flush tracked invoices to disk"))
+            .ToList();
+        Assert.Single(flushWarnings);
     }
 
     private class FailingSaveService : BareBitcoinInvoiceService
