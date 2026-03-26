@@ -156,7 +156,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             OnAfterWrite?.Invoke(invoice);
                             if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
                             {
-                                _logger.LogWarning(
+                                _persistenceWarningThrottle.LogWarning(null,
                                     "Delivered paid invoices set reached {Capacity}, clearing to prevent unbounded growth. " +
                                     "This may cause duplicate delivery of recently paid invoices, which is safe",
                                     _maxDeliveredCapacity);
