@@ -345,8 +345,17 @@ public class LogThrottleTests
 
         Task.WaitAll(tasks);
 
-        // All tasks completed without exceptions; state is consistent
+        // All tasks completed without exceptions; stale entries were evicted and
+        // only the concurrently-added templates remain (8 threads × 50 = 400 templates,
+        // but eviction keeps removing stale ones, so count should stay bounded).
         Assert.True(throttle.StateCount > 0);
+        Assert.True(throttle.StateCount <= 400,
+            $"Expected at most 400 entries but found {throttle.StateCount}");
+
+        // Verify no duplicate summary logs (each suppressed-count message should appear at most once per template)
+        var summaries = logger.Entries.FindAll(e => e.Message.Contains("Suppressed"));
+        var uniqueSummaryTemplates = new HashSet<string>(summaries.ConvertAll(e => e.Message));
+        Assert.Equal(uniqueSummaryTemplates.Count, summaries.Count);
     }
 
     [Theory]

@@ -121,9 +121,11 @@ internal class LogThrottle
                         if (state.SuppressedCount > 0)
                         {
                             var (level, template) = kvp.Key;
+                            var count = state.SuppressedCount;
+                            state.SuppressedCount = 0;
                             _logger.Log(level,
                                 "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
-                                state.SuppressedCount, template, _suppressionWindow);
+                                count, template, _suppressionWindow);
                         }
                     }
                 }
