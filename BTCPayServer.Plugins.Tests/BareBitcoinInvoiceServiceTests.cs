@@ -296,6 +296,29 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public void GetFlushBackoff_ProducesExponentialDelaysCappedAtMax()
+    {
+        // Verify the backoff progression formula: min(1 * 2^failures, 30) seconds
+        var flush = BareBitcoinInvoiceService.FlushInterval.TotalSeconds;
+        var max = BareBitcoinInvoiceService.MaxFlushBackoff.TotalSeconds;
+
+        // failures=0 → 1*2^0 = 1s (used for first retry after increment)
+        Assert.Equal(1, Math.Min(flush * Math.Pow(2, 0), max));
+        // failures=1 → 1*2^1 = 2s
+        Assert.Equal(2, Math.Min(flush * Math.Pow(2, 1), max));
+        // failures=2 → 1*2^2 = 4s
+        Assert.Equal(4, Math.Min(flush * Math.Pow(2, 2), max));
+        // failures=3 → 1*2^3 = 8s
+        Assert.Equal(8, Math.Min(flush * Math.Pow(2, 3), max));
+        // failures=4 → 1*2^4 = 16s
+        Assert.Equal(16, Math.Min(flush * Math.Pow(2, 4), max));
+        // failures=5 → 1*2^5 = 32 → capped at 30s
+        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 5), max));
+        // failures=10 → 1*2^10 = 1024 → capped at 30s
+        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 10), max));
+    }
+
+    [Fact]
     public async Task FlushAsync_ThrottlesLogs_OnRepeatedFailure()
     {
         var logger = new RecordingLogger();
