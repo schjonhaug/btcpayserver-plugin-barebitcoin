@@ -9,6 +9,7 @@ using System.Threading.Tasks;
 using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.BareBitcoin;
 using BTCPayServer.Plugins.BareBitcoin.Services;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using NBitcoin;
 using Xunit;
@@ -33,9 +34,17 @@ public class BareBitcoinLightningClientTests
         }
         """;
 
+    private static string CreateInvoiceApiJson() => $$"""
+        {
+            "depositDestinationId": "dep-1",
+            "invoice": "{{TestBolt11}}"
+        }
+        """;
+
     private static BareBitcoinLightningClient CreateClient(
         HttpMessageHandler handler,
-        IBareBitcoinInvoiceService invoiceService)
+        IBareBitcoinInvoiceService invoiceService,
+        ILogger? logger = null)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
@@ -45,7 +54,7 @@ public class BareBitcoinLightningClientTests
             apiEndpoint: new Uri("https://api.example.com"),
             network: Network.Main,
             httpClient: httpClient,
-            logger: NullLogger.Instance,
+            logger: logger ?? NullLogger.Instance,
             invoiceService: invoiceService);
     }
 
@@ -94,6 +103,76 @@ public class BareBitcoinLightningClientTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => client.GetInvoice("inv-3"));
+    }
+
+    [Fact]
+    public async Task CreateInvoice_ReturnsInvoice_WhenTrackInvoiceThrowsIOException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new IOException("disk full"));
+
+        var handler = new FakeMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        Assert.NotNull(result);
+        Assert.Equal("dep-1", result.Id);
+        Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
+        Assert.Equal(TestBolt11, result.BOLT11);
+    }
+
+    [Fact]
+    public async Task GetInvoice_LogsWarning_WhenTrackInvoiceThrowsIOException()
+    {
+        var logger = new CapturingLogger();
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new IOException("disk full"));
+
+        var handler = new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID"));
+        var client = CreateClient(handler, invoiceService, logger);
+
+        await client.GetInvoice("inv-log-1");
+
+        var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
+        Assert.Contains("inv-log-1", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
+    }
+
+    [Fact]
+    public async Task GetInvoice_LogsWarning_WhenUntrackInvoiceThrowsIOException()
+    {
+        var logger = new CapturingLogger();
+        var invoiceService = new ThrowingInvoiceService(
+            untrackException: new IOException("disk full"));
+
+        var handler = new FakeMessageHandler(ApiJson("INVOICE_STATUS_EXPIRED"));
+        var client = CreateClient(handler, invoiceService, logger);
+
+        await client.GetInvoice("inv-log-2");
+
+        var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
+        Assert.Contains("inv-log-2", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_LogsWarning_WhenTrackInvoiceThrowsIOException()
+    {
+        var logger = new CapturingLogger();
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new IOException("disk full"));
+
+        var handler = new FakeMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService, logger);
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
+        Assert.Contains("dep-1", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
     }
 
     private sealed class ThrowingInvoiceService(
@@ -168,5 +247,22 @@ public class BareBitcoinLightningClientTests
         {
             return Task.FromException<HttpResponseMessage>(exception);
         }
+    }
+
+    private sealed class CapturingLogger : ILogger
+    {
+        public List<LogEntry> Entries { get; } = new();
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            Entries.Add(new LogEntry(logLevel, formatter(state, exception), exception));
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+
+        public record LogEntry(LogLevel LogLevel, string Message, Exception? Exception);
     }
 }
