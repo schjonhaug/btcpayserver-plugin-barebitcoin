@@ -228,6 +228,22 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_ReturnsNull_WhenInvoiceFieldIsMissing()
+    {
+        var json = """
+            {
+                "status": "INVOICE_STATUS_UNPAID"
+            }
+            """;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new FakeMessageHandler(json);
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.GetInvoice("inv-missing");
+        Assert.Null(result);
+    }
+
+    [Fact]
     public async Task GetInvoice_PropagatesFormatException_FromMalformedBolt11()
     {
         var json = """
