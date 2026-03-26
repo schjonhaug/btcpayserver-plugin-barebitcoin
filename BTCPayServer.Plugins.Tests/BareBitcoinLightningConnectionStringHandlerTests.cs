@@ -29,8 +29,10 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
             Directory.Delete(_tempDir, recursive: true);
     }
 
-    [Fact]
-    public void Create_ReturnsClientWithoutHttpContextDependency()
+    private const string BaseConnectionString =
+        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123";
+
+    private BareBitcoinLightningConnectionStringHandler CreateHandler()
     {
         var httpClientFactory = new StubHttpClientFactory(new HttpClient(new JsonHandler("""
             {
@@ -43,15 +45,67 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
             }
             """)));
         var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(_tempDir, "tracked-invoices.json"));
-        var handler = new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance, invoiceService);
+        return new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance, invoiceService);
+    }
+
+    [Fact]
+    public void Create_ReturnsClientWithoutHttpContextDependency()
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(BaseConnectionString, Network.Main, out var error);
+
+        Assert.NotNull(client);
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void Create_WithMaxPollConcurrency_ReturnsClient()
+    {
+        var handler = CreateHandler();
 
         var client = handler.Create(
-            "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123",
+            BaseConnectionString + ";max-poll-concurrency=5",
             Network.Main,
             out var error);
 
         Assert.NotNull(client);
         Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData(1)]
+    [InlineData(100)]
+    public void Create_WithBoundaryMaxPollConcurrency_ReturnsClient(int concurrency)
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            BaseConnectionString + $";max-poll-concurrency={concurrency}",
+            Network.Main,
+            out var error);
+
+        Assert.NotNull(client);
+        Assert.Null(error);
+    }
+
+    [Theory]
+    [InlineData("0")]
+    [InlineData("-1")]
+    [InlineData("101")]
+    [InlineData("abc")]
+    [InlineData("")]
+    public void Create_WithInvalidMaxPollConcurrency_ReturnsError(string value)
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            BaseConnectionString + $";max-poll-concurrency={value}",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Equal("The key 'max-poll-concurrency' must be an integer between 1 and 100", error);
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
