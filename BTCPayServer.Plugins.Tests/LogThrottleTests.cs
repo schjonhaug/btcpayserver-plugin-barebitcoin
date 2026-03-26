@@ -135,6 +135,23 @@ public class LogThrottleTests
         Assert.Contains("Template inv-3", _logger.Entries[2].Message);
     }
 
+    [Fact]
+    public void BackwardClockJump_WithNoSuppressed_LogsWithoutSummary()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+
+        // Clock jumps backward with no intermediate (suppressed) calls
+        _now -= TimeSpan.FromMinutes(2);
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Should have: initial warning, new warning (no summary since nothing was suppressed)
+        Assert.Equal(2, _logger.Entries.Count);
+        Assert.Contains("Template inv-1", _logger.Entries[0].Message);
+        Assert.Contains("Template inv-2", _logger.Entries[1].Message);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
