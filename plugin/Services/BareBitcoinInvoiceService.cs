@@ -23,18 +23,26 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
+    private readonly IDiskWriter _diskWriter;
     private readonly Timer _flushTimer;
     private long _snapshotVersion;
     private long _writtenVersion;
     private bool _dirty;
     private bool _disposed;
+    private Exception? _lastFlushException;
+
+    /// <summary>
+    /// The exception from the most recent flush failure, or null if the last flush succeeded.
+    /// </summary>
+    public Exception? LastFlushException => Volatile.Read(ref _lastFlushException);
 
     internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
-    public BareBitcoinInvoiceService(ILogger logger, string dataFilePath)
+    public BareBitcoinInvoiceService(ILogger logger, string dataFilePath, IDiskWriter? diskWriter = null)
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
+        _diskWriter = diskWriter ?? new FileDiskWriter(dataFilePath);
         _flushTimer = new Timer(async _ =>
         {
             try { await FlushAsync().ConfigureAwait(false); }
@@ -114,18 +122,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         try
         {
+            if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
+
             string json;
             long version;
-
-            try
-            {
-                await _invoiceTrackingLock.WaitAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
             try
             {
                 if (!_dirty) return;
@@ -142,54 +142,26 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             }
             finally
             {
-                try { _invoiceTrackingLock.Release(); }
-                catch (ObjectDisposedException) { }
+                SafeRelease(_invoiceTrackingLock);
             }
 
-            try
-            {
-                await _diskWriteLock.WaitAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
+            if (!await TryAcquireAsync(_diskWriteLock)) return;
             try
             {
                 if (version <= _writtenVersion) return;
                 await SaveToDiskAsync(json);
                 _writtenVersion = version;
+                Volatile.Write(ref _lastFlushException, null);
             }
             catch (Exception ex)
             {
+                Volatile.Write(ref _lastFlushException, ex);
                 _logger.LogError(ex, "Failed to flush tracked invoices to disk");
-
-                try
-                {
-                    await _invoiceTrackingLock.WaitAsync();
-                }
-                catch (ObjectDisposedException)
-                {
-                    return;
-                }
-
-                try
-                {
-                    _dirty = true;
-                    if (!_disposed)
-                        ScheduleFlush();
-                }
-                finally
-                {
-                    try { _invoiceTrackingLock.Release(); }
-                    catch (ObjectDisposedException) { }
-                }
+                await MarkDirtyAndRescheduleAsync();
             }
             finally
             {
-                try { _diskWriteLock.Release(); }
-                catch (ObjectDisposedException) { }
+                SafeRelease(_diskWriteLock);
             }
         }
         catch (Exception ex)
@@ -205,8 +177,57 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
         await _flushTimer.DisposeAsync();
         await FlushAsync();
+
+        if (Volatile.Read(ref _lastFlushException) != null)
+        {
+            _logger.LogWarning("Retrying final flush after initial failure during dispose");
+            await Task.Delay(100);
+            await FlushAsync();
+        }
+
+        var finalException = Volatile.Read(ref _lastFlushException);
+        if (finalException != null)
+        {
+            _logger.LogError(finalException,
+                "Final flush failed during dispose — tracked invoice state may be lost on restart");
+        }
+
         _invoiceTrackingLock.Dispose();
         _diskWriteLock.Dispose();
+    }
+
+    private static async Task<bool> TryAcquireAsync(SemaphoreSlim semaphore)
+    {
+        try
+        {
+            await semaphore.WaitAsync();
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static void SafeRelease(SemaphoreSlim semaphore)
+    {
+        try { semaphore.Release(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task MarkDirtyAndRescheduleAsync()
+    {
+        if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
+        try
+        {
+            _dirty = true;
+            if (!_disposed)
+                ScheduleFlush();
+        }
+        finally
+        {
+            SafeRelease(_invoiceTrackingLock);
+        }
     }
 
     private void ScheduleFlush()
@@ -222,13 +243,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         try
         {
-            if (!File.Exists(_dataFilePath))
+            var json = _diskWriter.Read();
+            if (json == null)
             {
                 _logger.LogDebug("No tracked invoices file found at {Path}, starting with empty registry", _dataFilePath);
                 return;
             }
 
-            var json = File.ReadAllText(_dataFilePath);
             var invoiceIds = JsonConvert.DeserializeObject<string[]>(json);
             if (invoiceIds != null)
             {
@@ -250,14 +271,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
-    private async Task SaveToDiskAsync(string json)
+    internal virtual async Task SaveToDiskAsync(string json)
     {
-        var directory = Path.GetDirectoryName(_dataFilePath);
-        if (directory != null)
-            Directory.CreateDirectory(directory);
-
-        var tmpPath = _dataFilePath + ".tmp";
-        await File.WriteAllTextAsync(tmpPath, json);
-        File.Move(tmpPath, _dataFilePath, overwrite: true);
+        await _diskWriter.WriteAsync(json);
     }
 }
