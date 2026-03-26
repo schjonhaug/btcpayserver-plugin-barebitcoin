@@ -250,7 +250,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal TimeSpan GetFlushBackoff()
     {
-        var exponent = Math.Min(_consecutiveFlushFailures - 1, 10);
+        var exponent = Math.Clamp(_consecutiveFlushFailures - 1, 0, 10);
         var seconds = FlushInterval.TotalSeconds * Math.Pow(2, exponent);
         return TimeSpan.FromSeconds(Math.Min(seconds, MaxFlushBackoff.TotalSeconds));
     }
