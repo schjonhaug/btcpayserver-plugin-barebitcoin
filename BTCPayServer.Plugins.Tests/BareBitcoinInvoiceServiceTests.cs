@@ -376,6 +376,81 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         Assert.Single(flushErrors);
     }
 
+    [Fact]
+    public async Task FlushAsync_SerializationFailure_IncrementsBackoffAndSetsException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSerializeService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        await service.FlushAsync();
+        Assert.Equal(1, service.ConsecutiveFlushFailures);
+        Assert.IsType<InvalidOperationException>(service.LastFlushException);
+
+        await service.FlushAsync();
+        Assert.Equal(2, service.ConsecutiveFlushFailures);
+
+        await service.FlushAsync();
+        Assert.Equal(3, service.ConsecutiveFlushFailures);
+    }
+
+    [Fact]
+    public async Task FlushAsync_SerializationRecovery_ResetsBackoffAndClearsException()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSerializeService(logger, FilePath, failCount: 2);
+        await service.TrackInvoice("inv-1");
+
+        await service.FlushAsync();
+        await service.FlushAsync();
+        Assert.Equal(2, service.ConsecutiveFlushFailures);
+        Assert.NotNull(service.LastFlushException);
+
+        await service.FlushAsync();
+        Assert.Equal(0, service.ConsecutiveFlushFailures);
+        Assert.Null(service.LastFlushException);
+
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("inv-1", persisted);
+    }
+
+    [Fact]
+    public async Task FlushAsync_ThrottlesLogs_OnRepeatedSerializationFailure()
+    {
+        var logger = new RecordingLogger();
+        await using var service = new FailingSerializeService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        for (var i = 0; i < 10; i++)
+            await service.FlushAsync();
+
+        var serializeWarnings = logger.Entries
+            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains("Failed to serialize tracked invoices"))
+            .ToList();
+        Assert.Single(serializeWarnings);
+    }
+
+    private class FailingSerializeService : BareBitcoinInvoiceService
+    {
+        private int _failCount;
+
+        public FailingSerializeService(ILogger logger, string dataFilePath, int failCount = int.MaxValue)
+            : base(logger, dataFilePath)
+        {
+            _failCount = failCount;
+        }
+
+        internal override string SerializeRegistry()
+        {
+            if (_failCount > 0)
+            {
+                _failCount--;
+                throw new InvalidOperationException("Simulated serialization failure");
+            }
+            return base.SerializeRegistry();
+        }
+    }
+
     private class FailingSaveService : BareBitcoinInvoiceService
     {
         private int _failCount;

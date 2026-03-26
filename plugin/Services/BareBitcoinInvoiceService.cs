@@ -133,7 +133,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             try
             {
                 if (!_dirty) return;
-                json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+                json = SerializeRegistry();
                 _dirty = false;
                 version = ++_snapshotVersion;
             }
@@ -288,6 +288,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         {
             _logger.LogWarning(ex, "Failed to read tracked invoices file at {Path}, starting with empty registry", _dataFilePath);
         }
+    }
+
+    internal virtual string SerializeRegistry()
+    {
+        return JsonConvert.SerializeObject(_trackedInvoiceRegistry);
     }
 
     internal virtual async Task SaveToDiskAsync(string json)
