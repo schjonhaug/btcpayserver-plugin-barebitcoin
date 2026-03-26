@@ -290,6 +290,100 @@ public class BareBitcoinLightningClientTests
             () => client.GetInvoice("inv-6"));
     }
 
+    [Fact]
+    public async Task GetInvoice_ThrowsRateLimitedException_WhenBackoffEntryExists()
+    {
+        var attemptCount = 0;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new PerInvoiceHandler(_ =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+        client.SetRateLimitBackoff("inv-deferred", DateTimeOffset.UtcNow.AddMinutes(5));
+
+        var ex = await Assert.ThrowsAsync<RateLimitedException>(
+            () => client.GetInvoice("inv-deferred"));
+        Assert.NotNull(ex.RetryAfter);
+        Assert.True(ex.RetryAfter > TimeSpan.Zero, "RetryAfter should be positive");
+        Assert.Equal(0, attemptCount);
+    }
+
+    [Fact]
+    public async Task GetInvoice_RetriesTransientError_ThenSucceeds()
+    {
+        var attemptCount = 0;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return attempt == 1
+                ? Task.FromException<HttpResponseMessage>(
+                    new HttpRequestException("connection refused"))
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+                });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.GetInvoice("inv-retry");
+
+        Assert.NotNull(result);
+        Assert.Equal("inv-retry", result.Id);
+        Assert.Equal(2, attemptCount);
+    }
+
+    [Fact]
+    public async Task GetInvoice_ThrowsRateLimitedException_WhenRetryAfterExceedsCap()
+    {
+        var attemptCount = 0;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("rate limited")
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+            return Task.FromResult(response);
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var ex = await Assert.ThrowsAsync<RateLimitedException>(
+            () => client.GetInvoice("inv-long-wait"));
+        Assert.Equal(1, attemptCount);
+        Assert.Equal(1, client.RateLimitBackoffCount);
+        Assert.Equal(TimeSpan.FromSeconds(120), ex.RetryAfter);
+    }
+
+    [Fact]
+    public async Task GetInvoice_ThrowsHttpRequestException_WhenMaxRetriesExceeded()
+    {
+        var attemptCount = 0;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new PerInvoiceHandler(_ =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            return Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("connection refused"));
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.GetInvoice("inv-exhaust"));
+        Assert.Equal(4, attemptCount);
+    }
+
     private sealed class FakeMessageHandler(string responseBody) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
