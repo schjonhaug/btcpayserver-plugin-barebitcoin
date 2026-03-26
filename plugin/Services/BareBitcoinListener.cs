@@ -1,6 +1,8 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
+using System.IO;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -17,16 +19,20 @@ public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly ILightningClient _lightningClient;
     private readonly IBareBitcoinInvoiceService _invoiceService;
-    
+
     // Channel for communicating paid invoices back to BTCPay Server
     // Uses a bounded channel with a capacity of 100 to prevent memory issues
     private readonly Channel<LightningInvoice> _invoices;
-    
+
     // Cancellation and task management
     private readonly CancellationTokenSource _cts;
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
-    
+    private readonly LogThrottle _persistenceWarningThrottle;
+
+    // Guards against duplicate paid invoice delivery when UntrackInvoice fails
+    private readonly HashSet<string> _deliveredPaidInvoices = new();
+
     private bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
@@ -63,6 +69,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _invoiceService = invoiceService;
         _logger = logger;
         _maxPollConcurrency = maxPollConcurrency;
+        _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _cts = new CancellationTokenSource();
         OnBeforeWrite = onBeforeWrite;
         OnAfterWrite = onAfterWrite;
@@ -130,23 +137,30 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     if (invoice == null)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
-                        await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
+                        if (await TryUntrackInvoice(invoiceId))
+                            _deliveredPaidInvoices.Remove(invoiceId);
                         continue;
                     }
 
                     _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
-                        _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
-                        OnBeforeWrite?.Invoke(invoice);
-                        await _invoices.Writer.WriteAsync(invoice, _cts.Token);
-                        OnAfterWrite?.Invoke(invoice);
-                        await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
+                        if (!_deliveredPaidInvoices.Contains(invoiceId))
+                        {
+                            _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
+                            OnBeforeWrite?.Invoke(invoice);
+                            await _invoices.Writer.WriteAsync(invoice, _cts.Token);
+                            OnAfterWrite?.Invoke(invoice);
+                            _deliveredPaidInvoices.Add(invoiceId);
+                        }
+                        if (await TryUntrackInvoice(invoiceId))
+                            _deliveredPaidInvoices.Remove(invoiceId);
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has expired, removing from tracking list", invoiceId);
-                        await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
+                        if (await TryUntrackInvoice(invoiceId))
+                            _deliveredPaidInvoices.Remove(invoiceId);
                     }
                 }
 
@@ -205,6 +219,20 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     break;
                 }
             }
+        }
+    }
+
+    private async Task<bool> TryUntrackInvoice(string invoiceId)
+    {
+        try
+        {
+            await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
+            return true;
+        }
+        catch (IOException ex)
+        {
+            _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+            return false;
         }
     }
 
