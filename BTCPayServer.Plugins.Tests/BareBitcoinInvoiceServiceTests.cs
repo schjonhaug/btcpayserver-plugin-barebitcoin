@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
@@ -359,6 +360,63 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task TimerFlush_DiskFailure_LogsWarningAndServiceRemainsStable()
+    {
+        var logger = new SignalingRecordingLogger("Failed to flush tracked invoices to disk");
+        var writer = new SignalingFailWriter();
+        await using var service = new BareBitcoinInvoiceService(logger, FilePath, writer);
+
+        await service.TrackInvoice("inv-1");
+
+        // Wait for the timer callback to complete logging after the disk failure
+        var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
+        Assert.Equal(logger.ExpectedLogEmitted, logged);
+
+        Assert.Contains(logger.Entries, e =>
+            e.Level == LogLevel.Warning && e.Message.Contains("Failed to flush tracked invoices to disk"));
+
+        // Service remains stable — in-memory state is intact
+        var tracked = await service.GetTrackedInvoices();
+        Assert.Contains("inv-1", tracked);
+
+        await service.TrackInvoice("inv-2");
+        tracked = await service.GetTrackedInvoices();
+        Assert.Equal(2, tracked.Count);
+    }
+
+    [Fact]
+    public async Task TimerCallback_CatchesException_WhenFlushAsyncThrows()
+    {
+        var logger = new EscalatingThrowLogger();
+        var writer = new SignalingFailWriter();
+        await using var service = new BareBitcoinInvoiceService(logger, FilePath, writer);
+        try
+        {
+            await service.TrackInvoice("inv-1");
+
+            // Wait for the timer callback's defense-in-depth catch to log the error
+            var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.Equal(logger.ExpectedLogEmitted, logged);
+
+            Assert.Contains(logger.Entries, e =>
+                e.Level == LogLevel.Error && e.Message.Contains("Unhandled exception in flush timer callback"));
+
+            // Service remains stable
+            var tracked = await service.GetTrackedInvoices();
+            Assert.Contains("inv-1", tracked);
+
+            await service.TrackInvoice("inv-2");
+            tracked = await service.GetTrackedInvoices();
+            Assert.Equal(2, tracked.Count);
+        }
+        finally
+        {
+            // Disable throwing so dispose's FlushAsync doesn't cause issues
+            logger.ThrowOnFlushLogs = false;
+        }
+    }
+
+    [Fact]
     public async Task FlushAsync_ThrottlesLogs_OnRepeatedFailure()
     {
         var logger = new RecordingLogger();
@@ -543,5 +601,73 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
                 throw new IOException("Simulated disk failure");
             await _inner.WriteAsync(content);
         }
+    }
+
+    private class SignalingFailWriter : IDiskWriter
+    {
+        public string? Read() => null;
+
+        public Task WriteAsync(string content)
+        {
+            throw new IOException("Simulated disk failure");
+        }
+    }
+
+    private class SignalingRecordingLogger : ILogger
+    {
+        private readonly string _signalSubstring;
+        private readonly TaskCompletionSource _expectedLog = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> _entries = new();
+
+        public SignalingRecordingLogger(string signalSubstring) => _signalSubstring = signalSubstring;
+
+        public Task ExpectedLogEmitted => _expectedLog.Task;
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries => _entries.ToList();
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+            _entries.Enqueue((logLevel, message, exception));
+            if (message.Contains(_signalSubstring))
+                _expectedLog.TrySetResult();
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+    }
+
+    private class EscalatingThrowLogger : ILogger
+    {
+        public volatile bool ThrowOnFlushLogs = true;
+        private readonly TaskCompletionSource _expectedLog = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly ConcurrentQueue<(LogLevel Level, string Message, Exception? Exception)> _entries = new();
+
+        public Task ExpectedLogEmitted => _expectedLog.Task;
+        public IReadOnlyList<(LogLevel Level, string Message, Exception? Exception)> Entries => _entries.ToList();
+
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state,
+            Exception? exception, Func<TState, Exception?, string> formatter)
+        {
+            var message = formatter(state, exception);
+
+            if (ThrowOnFlushLogs)
+            {
+                // Force exceptions to escape FlushAsync's internal catches so the
+                // timer callback's defense-in-depth catch is exercised.
+                if (logLevel == LogLevel.Warning && message.Contains("Failed to flush"))
+                    throw new InvalidOperationException("Logger exploded on warning");
+
+                if (logLevel == LogLevel.Error && message.Contains("Unhandled exception in FlushAsync"))
+                    throw new InvalidOperationException("Logger exploded on error");
+            }
+
+            _entries.Enqueue((logLevel, message, exception));
+            if (message.Contains("Unhandled exception in flush timer callback"))
+                _expectedLog.TrySetResult();
+        }
+
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 }
