@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -190,16 +191,20 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("ListInvoices(request: {request})", request);
         try
         {
-            var invoices = new List<LightningInvoice>();
+            var invoices = new ConcurrentBag<LightningInvoice>();
             var isPendingOnly = request.PendingOnly.GetValueOrDefault(false);
 
             var trackedInvoices = await _invoiceService.GetTrackedInvoices(cancellation);
-            foreach (var invoiceId in trackedInvoices)
+            await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
+            {
+                MaxDegreeOfParallelism = _maxPollConcurrency,
+                CancellationToken = cancellation
+            }, async (invoiceId, token) =>
             {
                 LightningInvoice? invoice;
                 try
                 {
-                    invoice = await GetInvoice(invoiceId, cancellation);
+                    invoice = await GetInvoice(invoiceId, token);
                 }
                 catch (Exception ex) when (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
                 {
@@ -208,7 +213,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException)
                 {
                     Logger.LogWarning(ex, "Skipping invoice {InvoiceId} due to error", invoiceId);
-                    continue;
+                    return;
                 }
 
                 if (invoice != null)
@@ -220,9 +225,9 @@ public class BareBitcoinLightningClient : ILightningClient
                         invoices.Add(invoice);
                     }
                 }
-            }
+            });
 
-            Logger.LogInformation("Found {Count} matching invoices (PendingOnly: {PendingOnly})", 
+            Logger.LogInformation("Found {Count} matching invoices (PendingOnly: {PendingOnly})",
                 invoices.Count, isPendingOnly);
 
             return invoices.ToArray();
