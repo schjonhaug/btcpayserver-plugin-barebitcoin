@@ -119,6 +119,19 @@ public class LogThrottleTests
         Assert.DoesNotContain("Suppressed", _logger.Entries[1].Message);
     }
 
+    [Fact]
+    public void FirstCall_LogsImmediately_EvenWithLowTimestamp()
+    {
+        // Simulate early boot: timestamp near zero, less than the suppression window
+        long earlyBootNow = (long)(30 * Stopwatch.Frequency); // 30 seconds after boot
+        var throttle = new LogThrottle(_logger, _window, () => earlyBootNow);
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+
+        Assert.Single(_logger.Entries);
+        Assert.Contains("Template inv-1", _logger.Entries[0].Message);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
