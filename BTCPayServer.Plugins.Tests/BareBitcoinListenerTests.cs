@@ -561,6 +561,54 @@ public class BareBitcoinListenerTests : IDisposable
         throw new TimeoutException($"Invoice {invoiceId} was still tracked after {TestTimeout.TotalSeconds} seconds.");
     }
 
+    [Fact]
+    public async Task UntrackInvoice_IOException_DoesNotAbortRemainingInvoices()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice("inv-fail-untrack");
+        await realService.TrackInvoice("inv-ok");
+
+        // Wrap the real service so UntrackInvoice throws IOException for one invoice
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-fail-untrack");
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+
+        using var listener = new BareBitcoinListener(client, faultyService, NullLogger.Instance, channelCapacity: 10);
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        // Both invoices should be delivered despite IOException on untrack
+        var received = new HashSet<string>();
+        for (var i = 0; i < 2; i++)
+        {
+            var invoice = await listener.WaitInvoice(cts.Token);
+            received.Add(invoice.Id);
+        }
+
+        Assert.Contains("inv-fail-untrack", received);
+        Assert.Contains("inv-ok", received);
+    }
+
+    /// <summary>
+    /// Wraps a real IBareBitcoinInvoiceService, throwing IOException from UntrackInvoice
+    /// for a specific invoice ID to simulate disk failures.
+    /// </summary>
+    private sealed class FaultyUntrackInvoiceService(IBareBitcoinInvoiceService inner, string faultyInvoiceId) : IBareBitcoinInvoiceService
+    {
+        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+            => inner.TrackInvoice(invoiceId, cancellation);
+
+        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        {
+            if (invoiceId == faultyInvoiceId)
+                throw new IOException("Simulated disk failure");
+            return inner.UntrackInvoice(invoiceId, cancellation);
+        }
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+            => inner.GetTrackedInvoices(cancellation);
+    }
+
     /// <summary>
     /// Minimal ILightningClient implementation for testing BareBitcoinListener.
     /// Only GetInvoice(string, CancellationToken) is functional; all other methods throw.
