@@ -387,6 +387,19 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Equal("maxPollConcurrency", ex.ParamName);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_InvalidMaxDeliveredCapacity_ThrowsArgumentOutOfRange(int capacity)
+    {
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        var client = new FakeLightningClient((_, _) => throw new NotImplementedException());
+
+        var ex = Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10, maxDeliveredCapacity: capacity));
+        Assert.Equal("maxDeliveredCapacity", ex.ParamName);
+    }
+
     [Fact]
     public async Task PartialPollFailure_SuccessfulInvoiceIsDelivered_FailedInvoiceRemainsTracked()
     {

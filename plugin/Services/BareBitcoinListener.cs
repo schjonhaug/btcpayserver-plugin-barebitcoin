@@ -154,16 +154,16 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             OnBeforeWrite?.Invoke(invoice);
                             await _invoices.Writer.WriteAsync(invoice, _cts.Token);
                             OnAfterWrite?.Invoke(invoice);
-                            _deliveredPaidInvoices.Add(invoiceId);
-
-                            if (_deliveredPaidInvoices.Count > _maxDeliveredCapacity)
+                            if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
                             {
                                 _logger.LogWarning(
-                                    "Delivered paid invoices set exceeded {Capacity}, clearing to prevent unbounded growth. " +
+                                    "Delivered paid invoices set reached {Capacity}, clearing to prevent unbounded growth. " +
                                     "This may cause duplicate delivery of recently paid invoices, which is safe",
                                     _maxDeliveredCapacity);
                                 _deliveredPaidInvoices.Clear();
                             }
+
+                            _deliveredPaidInvoices.Add(invoiceId);
                         }
                         if (await TryUntrackInvoice(invoiceId))
                             _deliveredPaidInvoices.Remove(invoiceId);
