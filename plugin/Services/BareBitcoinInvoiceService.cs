@@ -105,6 +105,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
+        string? json;
+
         try
         {
             await _invoiceTrackingLock.WaitAsync();
@@ -117,19 +119,43 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         try
         {
             if (!_dirty) return;
-            await SaveToDiskAsync();
+            json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
             _dirty = false;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
-            if (!_disposed)
-                ScheduleFlush();
         }
         finally
         {
             try { _invoiceTrackingLock.Release(); }
             catch (ObjectDisposedException) { }
+        }
+
+        try
+        {
+            await SaveToDiskAsync(json);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+
+            try
+            {
+                await _invoiceTrackingLock.WaitAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                _dirty = true;
+                if (!_disposed)
+                    ScheduleFlush();
+            }
+            finally
+            {
+                try { _invoiceTrackingLock.Release(); }
+                catch (ObjectDisposedException) { }
+            }
         }
     }
 
@@ -184,14 +210,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
-    private async Task SaveToDiskAsync()
+    private async Task SaveToDiskAsync(string json)
     {
         var directory = Path.GetDirectoryName(_dataFilePath);
         if (directory != null)
             Directory.CreateDirectory(directory);
 
         var tmpPath = _dataFilePath + ".tmp";
-        var json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
         await File.WriteAllTextAsync(tmpPath, json);
         File.Move(tmpPath, _dataFilePath, overwrite: true);
     }
