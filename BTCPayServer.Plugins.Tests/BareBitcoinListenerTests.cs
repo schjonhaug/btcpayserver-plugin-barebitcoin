@@ -490,7 +490,7 @@ public class BareBitcoinListenerTests : IDisposable
             try
             {
                 if (current >= 2) overlapTcs.TrySetResult();
-                await overlapTcs.Task.WaitAsync(ct);
+                await overlapTcs.Task.WaitAsync(TestTimeout);
                 return PaidInvoice(invoiceId);
             }
             finally
