@@ -129,7 +129,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         Assert.NotNull(service.LastFlushException);
         Assert.IsType<IOException>(service.LastFlushException);
-        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Warning);
+        Assert.Contains(logger.Entries, e => e.Level == LogLevel.Error);
     }
 
     [Fact]
@@ -369,11 +369,11 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         for (var i = 0; i < 10; i++)
             await service.FlushAsync();
 
-        // First call logs a warning, subsequent calls within the 5-minute window are suppressed.
-        var flushWarnings = logger.Entries
-            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains("Failed to flush tracked invoices to disk"))
+        // First call logs an error, subsequent calls within the 5-minute window are suppressed.
+        var flushErrors = logger.Entries
+            .Where(e => e.Level == LogLevel.Error && e.Message.Contains("Failed to flush tracked invoices to disk"))
             .ToList();
-        Assert.Single(flushWarnings);
+        Assert.Single(flushErrors);
     }
 
     private class FailingSaveService : BareBitcoinInvoiceService
