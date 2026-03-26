@@ -195,12 +195,22 @@ public class BareBitcoinLightningClient : ILightningClient
             var trackedInvoices = await _invoiceService.GetTrackedInvoices(cancellation);
             foreach (var invoiceId in trackedInvoices)
             {
-                var invoice = await GetInvoice(invoiceId, cancellation);
+                LightningInvoice? invoice;
+                try
+                {
+                    invoice = await GetInvoice(invoiceId, cancellation);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    Logger.LogWarning(ex, "Skipping invoice {InvoiceId} due to error", invoiceId);
+                    continue;
+                }
+
                 if (invoice != null)
                 {
                     if (!isPendingOnly || invoice.Status == LightningInvoiceStatus.Unpaid)
                     {
-                        Logger.LogInformation("Adding invoice {InvoiceId} with status {Status} to results", 
+                        Logger.LogInformation("Adding invoice {InvoiceId} with status {Status} to results",
                             invoice.Id, invoice.Status);
                         invoices.Add(invoice);
                     }
