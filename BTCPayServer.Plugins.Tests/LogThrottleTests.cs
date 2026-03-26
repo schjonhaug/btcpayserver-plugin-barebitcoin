@@ -159,6 +159,42 @@ public class LogThrottleTests
     }
 
     [Fact]
+    public void SameTemplate_DifferentLevels_SuppressedCountsAreIsolated()
+    {
+        var throttle = CreateThrottle();
+
+        // First calls at each level — both log immediately
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Suppress further calls at each level within the window
+        Advance(TimeSpan.FromSeconds(30));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-4");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-5");
+
+        // Advance past window and trigger both levels again
+        Advance(TimeSpan.FromMinutes(5));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-6");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-7");
+
+        // Expected entries:
+        // 0: Warning inv-1 (first call)
+        // 1: Error inv-2 (first call)
+        // 2: Warning summary "Suppressed 2"
+        // 3: Warning inv-6
+        // 4: Error summary "Suppressed 1"
+        // 5: Error inv-7
+        Assert.Equal(6, _logger.Entries.Count);
+
+        Assert.Equal(LogLevel.Warning, _logger.Entries[2].Level);
+        Assert.Contains("Suppressed 2", _logger.Entries[2].Message);
+
+        Assert.Equal(LogLevel.Error, _logger.Entries[4].Level);
+        Assert.Contains("Suppressed 1", _logger.Entries[4].Message);
+    }
+
+    [Fact]
     public void Log_SummaryUsesCallerLogLevel()
     {
         var throttle = CreateThrottle();
