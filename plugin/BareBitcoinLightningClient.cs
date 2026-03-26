@@ -66,6 +66,56 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
+
+        const int baseDelayMs = 200;
+        var maxDelay = TimeSpan.FromSeconds(30);
+        var maxRateLimitDelay = TimeSpan.FromSeconds(60);
+
+        for (var attempt = 0; ; attempt++)
+        {
+            try
+            {
+                return await FetchInvoice(invoiceId, cancellation);
+            }
+            catch (HttpRequestException ex) when (
+                ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
+            {
+                throw;
+            }
+            catch (HttpRequestException ex) when (
+                attempt < _maxRetries && IsTransientHttpError(ex))
+            {
+                if (ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero)
+                {
+                    if (ra > maxRateLimitDelay)
+                    {
+                        Logger.LogWarning(
+                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, skipping until next poll cycle",
+                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
+                        return null;
+                    }
+
+                    Logger.LogWarning(ex,
+                        "Invoice {InvoiceId} rate-limited (attempt {Attempt}/{MaxRetries}), honoring Retry-After of {Delay}ms",
+                        invoiceId, attempt + 1, _maxRetries, (int)ra.TotalMilliseconds);
+                    await Task.Delay(ra, cancellation);
+                }
+                else
+                {
+                    var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
+                    if (backoff > maxDelay) backoff = maxDelay;
+
+                    Logger.LogWarning(ex,
+                        "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
+                        invoiceId, attempt + 1, _maxRetries, (int)backoff.TotalMilliseconds);
+                    await Task.Delay(backoff, cancellation);
+                }
+            }
+        }
+    }
+
+    private async Task<LightningInvoice?> FetchInvoice(string invoiceId, CancellationToken cancellation)
+    {
         string response;
         try
         {
@@ -190,55 +240,6 @@ public class BareBitcoinLightningClient : ILightningClient
         return false;
     }
 
-    private async Task<LightningInvoice?> GetInvoiceWithRetry(string invoiceId, CancellationToken cancellation)
-    {
-        const int baseDelayMs = 200;
-        var maxDelay = TimeSpan.FromSeconds(30);
-        var maxRateLimitDelay = TimeSpan.FromSeconds(60);
-
-        for (var attempt = 0; ; attempt++)
-        {
-            try
-            {
-                return await GetInvoice(invoiceId, cancellation);
-            }
-            catch (HttpRequestException ex) when (
-                ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
-            {
-                throw;
-            }
-            catch (HttpRequestException ex) when (
-                attempt < _maxRetries && IsTransientHttpError(ex))
-            {
-                if (ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero)
-                {
-                    if (ra > maxRateLimitDelay)
-                    {
-                        Logger.LogWarning(
-                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, skipping until next poll cycle",
-                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
-                        return null;
-                    }
-
-                    Logger.LogWarning(ex,
-                        "Invoice {InvoiceId} rate-limited (attempt {Attempt}/{MaxRetries}), honoring Retry-After of {Delay}ms",
-                        invoiceId, attempt + 1, _maxRetries, (int)ra.TotalMilliseconds);
-                    await Task.Delay(ra, cancellation);
-                }
-                else
-                {
-                    var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
-                    if (backoff > maxDelay) backoff = maxDelay;
-
-                    Logger.LogWarning(ex,
-                        "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
-                        invoiceId, attempt + 1, _maxRetries, (int)backoff.TotalMilliseconds);
-                    await Task.Delay(backoff, cancellation);
-                }
-            }
-        }
-    }
-
     public async Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListInvoices()");
@@ -264,7 +265,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 LightningInvoice? invoice;
                 try
                 {
-                    invoice = await GetInvoiceWithRetry(invoiceId, token);
+                    invoice = await GetInvoice(invoiceId, token);
                 }
                 catch (Exception ex) when (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
                 {
