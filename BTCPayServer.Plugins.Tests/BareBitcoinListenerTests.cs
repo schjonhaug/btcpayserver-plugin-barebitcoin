@@ -479,27 +479,24 @@ public class BareBitcoinListenerTests : IDisposable
         for (var i = 1; i <= 10; i++)
             await invoiceService.TrackInvoice($"inv-{i}");
 
-        // Track the peak number of concurrently in-flight polls using a barrier pattern.
-        // This proves structural concurrency without relying on wall-clock timing.
+        // Use a synchronization barrier to structurally prove overlapping in-flight calls
+        // instead of relying on wall-clock timing (Task.Delay), which is brittle on slow CI.
         var currentInFlight = 0;
-        var peakInFlight = 0;
+        var overlapTcs = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var client = new FakeLightningClient(async (invoiceId, ct) =>
         {
             var current = Interlocked.Increment(ref currentInFlight);
-
-            // Atomically update peak if we exceeded it
-            int snapshot;
-            do
+            try
             {
-                snapshot = Volatile.Read(ref peakInFlight);
-                if (current <= snapshot) break;
-            } while (Interlocked.CompareExchange(ref peakInFlight, current, snapshot) != snapshot);
-
-            // Small delay to keep polls in-flight long enough for overlap
-            await Task.Delay(100, ct);
-            Interlocked.Decrement(ref currentInFlight);
-            return PaidInvoice(invoiceId);
+                if (current >= 2) overlapTcs.TrySetResult();
+                await overlapTcs.Task.WaitAsync(ct);
+                return PaidInvoice(invoiceId);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref currentInFlight);
+            }
         });
 
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 20);
@@ -514,10 +511,9 @@ public class BareBitcoinListenerTests : IDisposable
         }
 
         Assert.Equal(10, received.Count);
-        // With 10 invoices and MaxPollConcurrency=10, all should be in-flight simultaneously.
-        // Assert at least 2 overlapping polls to prove concurrency (sequential would always be 1).
-        Assert.True(Volatile.Read(ref peakInFlight) >= 2,
-            $"Peak concurrent polls was {peakInFlight}, expected >= 2 to prove parallel execution");
+        // The barrier completing proves at least 2 polls were in-flight simultaneously.
+        Assert.True(overlapTcs.Task.IsCompletedSuccessfully,
+            "Expected at least 2 concurrent in-flight polls to prove parallel execution");
     }
 
     [Fact]
