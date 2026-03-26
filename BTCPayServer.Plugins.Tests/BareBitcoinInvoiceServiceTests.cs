@@ -390,26 +390,30 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         var logger = new EscalatingThrowLogger();
         var writer = new SignalingFailWriter();
         await using var service = new BareBitcoinInvoiceService(logger, FilePath, writer);
+        try
+        {
+            await service.TrackInvoice("inv-1");
 
-        await service.TrackInvoice("inv-1");
+            // Wait for the timer callback's defense-in-depth catch to log the error
+            var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
+            Assert.Equal(logger.ExpectedLogEmitted, logged);
 
-        // Wait for the timer callback's defense-in-depth catch to log the error
-        var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
-        Assert.Equal(logger.ExpectedLogEmitted, logged);
+            Assert.Contains(logger.Entries, e =>
+                e.Level == LogLevel.Error && e.Message.Contains("Unhandled exception in flush timer callback"));
 
-        Assert.Contains(logger.Entries, e =>
-            e.Level == LogLevel.Error && e.Message.Contains("Unhandled exception in flush timer callback"));
+            // Service remains stable
+            var tracked = await service.GetTrackedInvoices();
+            Assert.Contains("inv-1", tracked);
 
-        // Service remains stable
-        var tracked = await service.GetTrackedInvoices();
-        Assert.Contains("inv-1", tracked);
-
-        await service.TrackInvoice("inv-2");
-        tracked = await service.GetTrackedInvoices();
-        Assert.Equal(2, tracked.Count);
-
-        // Disable throwing so dispose's FlushAsync doesn't cause issues
-        logger.ThrowOnFlushLogs = false;
+            await service.TrackInvoice("inv-2");
+            tracked = await service.GetTrackedInvoices();
+            Assert.Equal(2, tracked.Count);
+        }
+        finally
+        {
+            // Disable throwing so dispose's FlushAsync doesn't cause issues
+            logger.ThrowOnFlushLogs = false;
+        }
     }
 
     [Fact]
