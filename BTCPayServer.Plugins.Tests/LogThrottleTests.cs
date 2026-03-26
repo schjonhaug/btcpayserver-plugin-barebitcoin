@@ -380,17 +380,21 @@ public class LogThrottleTests
 
     private class RecordingLogger : ILogger
     {
+        private readonly object _lock = new();
         public List<LogEntry> Entries { get; } = new();
         public LogLevel EnabledLevel { get; set; } = LogLevel.Trace;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            Entries.Add(new LogEntry
+            lock (_lock)
             {
-                Level = logLevel,
-                Message = formatter(state, exception),
-                Exception = exception
-            });
+                Entries.Add(new LogEntry
+                {
+                    Level = logLevel,
+                    Message = formatter(state, exception),
+                    Exception = exception
+                });
+            }
         }
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= EnabledLevel;
