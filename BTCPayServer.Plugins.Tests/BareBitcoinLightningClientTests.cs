@@ -678,6 +678,90 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("inv-stale-header", result[0].Id);
     }
 
+    [Fact]
+    public async Task ListInvoices_SkipsInvoiceWhenRetryAfterExceedsCap()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-long-wait" });
+
+        var attemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("rate limited")
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+            return Task.FromResult(response);
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Empty(result);
+        Assert.Equal(1, attemptCount);
+    }
+
+    [Fact]
+    public async Task ListInvoices_SkipsInvoiceWhenRetryAfterJustAboveCap()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-above-cap" });
+
+        var attemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("rate limited")
+            };
+            // 61 seconds: just above the 60-second cap, should trigger skip
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(61));
+            return Task.FromResult(response);
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Empty(result);
+        Assert.Equal(1, attemptCount);
+    }
+
+    [Fact]
+    public async Task ListInvoices_429WithoutRetryAfterFallsBackToBackoff()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-no-header" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+        {
+            if (attempt == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                // No Retry-After header set
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-no-header", result[0].Id);
+    }
+
     private sealed class CapturingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
