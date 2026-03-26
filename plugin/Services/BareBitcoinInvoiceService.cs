@@ -23,6 +23,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
+    private readonly IDiskWriter _diskWriter;
     private readonly Timer _flushTimer;
     private long _snapshotVersion;
     private long _writtenVersion;
@@ -37,10 +38,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
-    public BareBitcoinInvoiceService(ILogger logger, string dataFilePath)
+    public BareBitcoinInvoiceService(ILogger logger, string dataFilePath, IDiskWriter? diskWriter = null)
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
+        _diskWriter = diskWriter ?? new FileDiskWriter(dataFilePath);
         _flushTimer = new Timer(async _ =>
         {
             try { await FlushAsync().ConfigureAwait(false); }
@@ -241,13 +243,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         try
         {
-            if (!File.Exists(_dataFilePath))
+            var json = _diskWriter.Read();
+            if (json == null)
             {
                 _logger.LogDebug("No tracked invoices file found at {Path}, starting with empty registry", _dataFilePath);
                 return;
             }
 
-            var json = File.ReadAllText(_dataFilePath);
             var invoiceIds = JsonConvert.DeserializeObject<string[]>(json);
             if (invoiceIds != null)
             {
@@ -271,12 +273,6 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal virtual async Task SaveToDiskAsync(string json)
     {
-        var directory = Path.GetDirectoryName(_dataFilePath);
-        if (directory != null)
-            Directory.CreateDirectory(directory);
-
-        var tmpPath = _dataFilePath + ".tmp";
-        await File.WriteAllTextAsync(tmpPath, json);
-        File.Move(tmpPath, _dataFilePath, overwrite: true);
+        await _diskWriter.WriteAsync(json);
     }
 }
