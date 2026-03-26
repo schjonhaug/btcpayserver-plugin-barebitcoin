@@ -360,7 +360,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task TimerFlush_DiskFailure_LogsWarningAndServiceRemainsStable()
+    public async Task TimerFlush_DiskFailure_LogsErrorAndServiceRemainsStable()
     {
         var logger = new SignalingRecordingLogger("Failed to flush tracked invoices to disk");
         var writer = new SignalingFailWriter();
@@ -656,7 +656,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
                 // Force exceptions to escape FlushAsync's internal catches so the
                 // timer callback's defense-in-depth catch is exercised.
                 if (logLevel == LogLevel.Error && message.Contains("Failed to flush"))
-                    throw new InvalidOperationException("Logger exploded on warning");
+                    throw new InvalidOperationException("Logger exploded on error");
 
                 if (logLevel == LogLevel.Error && message.Contains("Unhandled exception in FlushAsync"))
                     throw new InvalidOperationException("Logger exploded on error");
