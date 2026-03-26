@@ -14,12 +14,16 @@ internal class LogThrottle
 {
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
+    private readonly TimeSpan _evictionAge;
+    private readonly TimeSpan _evictionInterval;
     private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<string, ThrottleState> _states = new();
+    private long _lastEvictionTimestamp;
 
     internal class ThrottleState
     {
         public long WindowStart;
+        public long LastAccessed;
         public bool IsFirstCall = true;
         public int SuppressedCount;
         public readonly object Lock = new();
@@ -30,17 +34,27 @@ internal class LogThrottle
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
+        _evictionAge = 10 * suppressionWindow;
+        _evictionInterval = suppressionWindow;
         _clock = clock ?? Stopwatch.GetTimestamp;
     }
 
     /// <summary>
     /// Logs a message at the specified level, throttling repeated calls with the same
     /// <paramref name="messageTemplate"/>. The template must be a static string literal;
-    /// dynamic templates will cause unbounded memory growth.
+    /// dynamic templates cause memory growth until entries are evicted.
     /// </summary>
     public void Log(LogLevel logLevel, Exception? ex, string messageTemplate, params object[] args)
     {
         if (!_logger.IsEnabled(logLevel)) return;
+
+        var now = _clock();
+
+        if (Stopwatch.GetElapsedTime(_lastEvictionTimestamp, now) >= _evictionInterval)
+        {
+            _lastEvictionTimestamp = now;
+            EvictStaleEntries(now);
+        }
 
         var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
         {
@@ -49,7 +63,7 @@ internal class LogThrottle
 
         lock (state.Lock)
         {
-            var now = _clock();
+            state.LastAccessed = now;
             var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
 
             if (state.IsFirstCall || elapsed >= _suppressionWindow)
@@ -95,5 +109,21 @@ internal class LogThrottle
     {
         _states.TryGetValue(messageTemplate, out var state);
         return state;
+    }
+
+    /// <summary>
+    /// Returns the number of tracked message templates (for testing).
+    /// </summary>
+    internal int StateCount => _states.Count;
+
+    private void EvictStaleEntries(long now)
+    {
+        foreach (var kvp in _states)
+        {
+            if (Stopwatch.GetElapsedTime(kvp.Value.LastAccessed, now) >= _evictionAge)
+            {
+                _states.TryRemove(kvp.Key, out _);
+            }
+        }
     }
 }

@@ -200,6 +200,62 @@ public class LogThrottleTests
         Assert.Contains("Template inv-1", _logger.Entries[0].Message);
     }
 
+    [Fact]
+    public void StaleEntries_AreEvicted()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template A {Id}", "inv-1");
+        Assert.Equal(1, throttle.StateCount);
+
+        // Advance past eviction age (10x window = 50 min) + eviction interval
+        Advance(TimeSpan.FromMinutes(55));
+
+        // Logging a different template triggers eviction scan
+        throttle.LogWarning(new IOException("disk"), "Template B {Id}", "inv-2");
+
+        Assert.Null(throttle.GetState("Template A {Id}"));
+        Assert.Equal(1, throttle.StateCount);
+    }
+
+    [Fact]
+    public void RecentEntries_AreNotEvicted()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template A {Id}", "inv-1");
+
+        // Advance past suppression window but within eviction age
+        Advance(TimeSpan.FromMinutes(10));
+
+        throttle.LogWarning(new IOException("disk"), "Template B {Id}", "inv-2");
+
+        // Both entries should still exist
+        Assert.NotNull(throttle.GetState("Template A {Id}"));
+        Assert.NotNull(throttle.GetState("Template B {Id}"));
+        Assert.Equal(2, throttle.StateCount);
+    }
+
+    [Fact]
+    public void ActiveEntry_SurvivesEviction()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template A {Id}", "inv-1");
+
+        // Advance 30 min (6x window), then refresh template A
+        Advance(TimeSpan.FromMinutes(30));
+        throttle.LogWarning(new IOException("disk"), "Template A {Id}", "inv-2");
+
+        // Advance 25 min more (total 55 min from start, but only 25 min since last access of A)
+        Advance(TimeSpan.FromMinutes(25));
+        throttle.LogWarning(new IOException("disk"), "Template B {Id}", "inv-3");
+
+        // Template A should survive: LastAccessed was refreshed 25 min ago, within eviction age of 50 min
+        Assert.NotNull(throttle.GetState("Template A {Id}"));
+        Assert.Equal(2, throttle.StateCount);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
