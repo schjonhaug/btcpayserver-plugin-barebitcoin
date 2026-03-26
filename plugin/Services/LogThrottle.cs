@@ -25,6 +25,15 @@ internal class LogThrottle
         public readonly object Lock = new();
     }
 
+    /// <summary>
+    /// Initializes a new instance of the <see cref="LogThrottle"/> class.
+    /// </summary>
+    /// <param name="logger">The logger to write throttled messages to.</param>
+    /// <param name="suppressionWindow">How long to suppress duplicate messages after the first occurrence.</param>
+    /// <param name="clock">
+    /// Optional clock function that must return values compatible with
+    /// <see cref="Stopwatch.GetTimestamp"/>. Defaults to <see cref="Stopwatch.GetTimestamp"/>.
+    /// </param>
     public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<long>? clock = null)
     {
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
