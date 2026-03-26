@@ -219,6 +219,30 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ConcurrentFlushAsync_VersionCheckPreventsRedundantWrites()
+    {
+        var writer = new CountingDiskWriter(new FileDiskWriter(FilePath));
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath, writer);
+
+        for (var i = 0; i < 10; i++)
+            await service.TrackInvoice($"inv-{i}");
+
+        // Launch multiple concurrent flushes — only one should actually write
+        var tasks = new Task[10];
+        for (var i = 0; i < 10; i++)
+            tasks[i] = service.FlushAsync();
+        await Task.WhenAll(tasks);
+
+        // Version-based deduplication means at most one write occurred
+        Assert.Equal(1, writer.WriteCount);
+
+        // Data integrity check
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        var tracked = await service2.GetTrackedInvoices();
+        Assert.Equal(10, tracked.Count);
+    }
+
+    [Fact]
     public async Task FailedDiskWrite_RemarksAsDirtyAndRetriesSuccessfully()
     {
         var writer = new FailOnceWriter(new FileDiskWriter(FilePath));
@@ -323,6 +347,24 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         }
 
         public void Release() => _releaseWrite.TrySetResult();
+    }
+
+    private class CountingDiskWriter : IDiskWriter
+    {
+        private readonly IDiskWriter _inner;
+        private int _writeCount;
+
+        public CountingDiskWriter(IDiskWriter inner) => _inner = inner;
+
+        public int WriteCount => Volatile.Read(ref _writeCount);
+
+        public string? Read() => _inner.Read();
+
+        public async Task WriteAsync(string content)
+        {
+            Interlocked.Increment(ref _writeCount);
+            await _inner.WriteAsync(content);
+        }
     }
 
     private class FailOnceWriter : IDiskWriter
