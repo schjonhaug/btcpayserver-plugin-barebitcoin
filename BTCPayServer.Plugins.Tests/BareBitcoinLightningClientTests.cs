@@ -826,13 +826,13 @@ public class BareBitcoinLightningClientTests
         Assert.Equal(1, callCount);
 
         // Simulate backoff expiry by setting the timestamp to the past
-        client.RateLimitBackoff["inv-recover"] = DateTimeOffset.UtcNow.AddSeconds(-1);
+        client.SetRateLimitBackoff("inv-recover", DateTimeOffset.UtcNow.AddSeconds(-1));
 
         // Next call: backoff expired, makes API call, succeeds, clears backoff
         var result2 = await client.ListInvoices(new ListInvoicesParams());
         Assert.Single(result2);
         Assert.Equal(2, callCount);
-        Assert.Empty(client.RateLimitBackoff);
+        Assert.Equal(0, client.RateLimitBackoffCount);
     }
 
     private sealed class CapturingLogger : ILogger

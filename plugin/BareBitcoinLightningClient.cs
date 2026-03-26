@@ -32,7 +32,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly int _maxPollConcurrency;
     private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
-    internal readonly ConcurrentDictionary<string, DateTimeOffset> RateLimitBackoff = new();
+    private readonly ConcurrentDictionary<string, DateTimeOffset> _rateLimitBackoff = new();
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
@@ -197,12 +197,18 @@ public class BareBitcoinLightningClient : ILightningClient
         var maxDelay = TimeSpan.FromSeconds(30);
         var maxRateLimitDelay = TimeSpan.FromSeconds(60);
 
-        if (RateLimitBackoff.TryGetValue(invoiceId, out var notBefore) && DateTimeOffset.UtcNow < notBefore)
+        if (_rateLimitBackoff.TryGetValue(invoiceId, out var notBefore))
         {
-            Logger.LogDebug(
-                "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
-                invoiceId, notBefore);
-            return null;
+            if (DateTimeOffset.UtcNow < notBefore)
+            {
+                Logger.LogDebug(
+                    "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
+                    invoiceId, notBefore);
+                return null;
+            }
+
+            // Backoff expired — remove stale entry and proceed with fetch
+            _rateLimitBackoff.TryRemove(invoiceId, out _);
         }
 
         for (var attempt = 0; ; attempt++)
@@ -210,7 +216,7 @@ public class BareBitcoinLightningClient : ILightningClient
             try
             {
                 var result = await GetInvoice(invoiceId, cancellation);
-                RateLimitBackoff.TryRemove(invoiceId, out _);
+                _rateLimitBackoff.TryRemove(invoiceId, out _);
                 return result;
             }
             catch (HttpRequestException ex) when (
@@ -225,7 +231,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     if (ra > maxRateLimitDelay)
                     {
-                        RateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + ra;
+                        _rateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + ra;
                         Logger.LogWarning(
                             "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {RetryAfter}s",
                             invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
@@ -250,6 +256,11 @@ public class BareBitcoinLightningClient : ILightningClient
             }
         }
     }
+
+    internal void SetRateLimitBackoff(string invoiceId, DateTimeOffset notBefore)
+        => _rateLimitBackoff[invoiceId] = notBefore;
+
+    internal int RateLimitBackoffCount => _rateLimitBackoff.Count;
 
     public async Task<LightningInvoice[]> ListInvoices(CancellationToken cancellation = new CancellationToken())
     {
