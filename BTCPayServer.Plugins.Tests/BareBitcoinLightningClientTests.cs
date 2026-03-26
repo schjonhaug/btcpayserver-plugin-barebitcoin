@@ -191,7 +191,8 @@ public class BareBitcoinLightningClientTests
 
     private sealed class ThrowingInvoiceService(
         Exception? trackException = null,
-        Exception? untrackException = null) : IBareBitcoinInvoiceService
+        Exception? untrackException = null,
+        IReadOnlyCollection<string>? trackedInvoices = null) : IBareBitcoinInvoiceService
     {
         public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
             => trackException is not null
@@ -204,7 +205,7 @@ public class BareBitcoinLightningClientTests
                 : Task.CompletedTask;
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
-            => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
+            => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
     }
 
     [Fact]
@@ -304,6 +305,81 @@ public class BareBitcoinLightningClientTests
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             return Task.FromException<HttpResponseMessage>(exception);
+        }
+    }
+
+    [Fact]
+    public async Task ListInvoices_ReturnsPartialResults_WhenOneInvoiceFails()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", "inv-fail", "inv-ok2" });
+
+        var handler = new PerInvoiceHandler(invoiceId =>
+            invoiceId == "inv-fail"
+                ? Task.FromException<HttpResponseMessage>(new HttpRequestException("connection refused"))
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+                }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Equal(2, result.Length);
+        Assert.Equal("inv-ok", result[0].Id);
+        Assert.Equal("inv-ok2", result[1].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_PropagatesOperationCanceledException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", "inv-cancel" });
+
+        var handler = new PerInvoiceHandler(invoiceId =>
+            invoiceId == "inv-cancel"
+                ? Task.FromException<HttpResponseMessage>(new OperationCanceledException("cancelled"))
+                : Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+                }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => client.ListInvoices(new ListInvoicesParams()));
+    }
+
+    [Fact]
+    public async Task ListInvoices_LogsWarning_WhenInvoiceIsSkipped()
+    {
+        var logger = new CapturingLogger();
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-fail" });
+
+        var handler = new PerInvoiceHandler(_ =>
+            Task.FromException<HttpResponseMessage>(new HttpRequestException("connection refused")));
+
+        var client = CreateClient(handler, invoiceService, logger);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Empty(result);
+        var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
+        Assert.Contains("inv-fail", warning.Message);
+        Assert.IsType<HttpRequestException>(warning.Exception);
+    }
+
+    private sealed class PerInvoiceHandler(Func<string, Task<HttpResponseMessage>> handler) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            // Extract invoice ID from URL path: /v1/deposit-destinations/bitcoin/invoice/{invoiceId}
+            var segments = request.RequestUri!.AbsolutePath.Split('/');
+            var invoiceId = segments[^1];
+            return handler(invoiceId);
         }
     }
 

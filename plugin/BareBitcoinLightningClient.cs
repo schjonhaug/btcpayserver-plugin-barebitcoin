@@ -200,7 +200,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     invoice = await GetInvoice(invoiceId, cancellation);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException)
                 {
                     Logger.LogWarning(ex, "Skipping invoice {InvoiceId} due to error", invoiceId);
                     continue;
