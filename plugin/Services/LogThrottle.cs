@@ -38,6 +38,8 @@ internal class LogThrottle
     /// </summary>
     public void Log(LogLevel logLevel, Exception? ex, string messageTemplate, params object[] args)
     {
+        if (!_logger.IsEnabled(logLevel)) return;
+
         var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
         {
             WindowStart = DateTimeOffset.MinValue
