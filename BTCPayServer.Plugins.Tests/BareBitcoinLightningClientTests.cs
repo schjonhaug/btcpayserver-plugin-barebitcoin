@@ -403,6 +403,38 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task ListInvoices_PropagatesUnauthorizedHttpException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-auth-fail" });
+
+        var handler = new PerInvoiceHandler(_ =>
+            Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("unauthorized", null, HttpStatusCode.Unauthorized)));
+
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.ListInvoices(new ListInvoicesParams()));
+    }
+
+    [Fact]
+    public async Task ListInvoices_PropagatesForbiddenHttpException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-forbidden" });
+
+        var handler = new PerInvoiceHandler(_ =>
+            Task.FromException<HttpResponseMessage>(
+                new HttpRequestException("forbidden", null, HttpStatusCode.Forbidden)));
+
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.ListInvoices(new ListInvoicesParams()));
+    }
+
+    [Fact]
     public async Task ListInvoices_LogsWarning_WhenInvoiceIsSkipped()
     {
         var logger = new CapturingLogger();
