@@ -185,7 +185,7 @@ public class BareBitcoinListenerTests : IDisposable
 
         // Signal when the polling loop reaches GetInvoice
         var reachedGetInvoice = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var blocker = new TaskCompletionSource<LightningInvoice?>();
+        var blocker = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var client = new FakeLightningClient((_, ct) =>
         {
@@ -442,7 +442,7 @@ public class BareBitcoinListenerTests : IDisposable
         var cancellationsObserved = 0;
         var allStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var allCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        var blocker = new TaskCompletionSource<LightningInvoice?>();
+        var blocker = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var client = new FakeLightningClient((_, ct) =>
         {
