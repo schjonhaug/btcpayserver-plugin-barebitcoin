@@ -114,18 +114,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         try
         {
+            if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
+
             string json;
             long version;
-
-            try
-            {
-                await _invoiceTrackingLock.WaitAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
             try
             {
                 if (!_dirty) return;
@@ -142,19 +134,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             }
             finally
             {
-                try { _invoiceTrackingLock.Release(); }
-                catch (ObjectDisposedException) { }
+                SafeRelease(_invoiceTrackingLock);
             }
 
-            try
-            {
-                await _diskWriteLock.WaitAsync();
-            }
-            catch (ObjectDisposedException)
-            {
-                return;
-            }
-
+            if (!await TryAcquireAsync(_diskWriteLock)) return;
             try
             {
                 if (version <= _writtenVersion) return;
@@ -164,32 +147,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Failed to flush tracked invoices to disk");
-
-                try
-                {
-                    await _invoiceTrackingLock.WaitAsync();
-                }
-                catch (ObjectDisposedException)
-                {
-                    return;
-                }
-
-                try
-                {
-                    _dirty = true;
-                    if (!_disposed)
-                        ScheduleFlush();
-                }
-                finally
-                {
-                    try { _invoiceTrackingLock.Release(); }
-                    catch (ObjectDisposedException) { }
-                }
+                await MarkDirtyAndRescheduleAsync();
             }
             finally
             {
-                try { _diskWriteLock.Release(); }
-                catch (ObjectDisposedException) { }
+                SafeRelease(_diskWriteLock);
             }
         }
         catch (Exception ex)
@@ -207,6 +169,40 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await FlushAsync();
         _invoiceTrackingLock.Dispose();
         _diskWriteLock.Dispose();
+    }
+
+    private static async Task<bool> TryAcquireAsync(SemaphoreSlim semaphore)
+    {
+        try
+        {
+            await semaphore.WaitAsync();
+            return true;
+        }
+        catch (ObjectDisposedException)
+        {
+            return false;
+        }
+    }
+
+    private static void SafeRelease(SemaphoreSlim semaphore)
+    {
+        try { semaphore.Release(); }
+        catch (ObjectDisposedException) { }
+    }
+
+    private async Task MarkDirtyAndRescheduleAsync()
+    {
+        if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
+        try
+        {
+            _dirty = true;
+            if (!_disposed)
+                ScheduleFlush();
+        }
+        finally
+        {
+            SafeRelease(_invoiceTrackingLock);
+        }
     }
 
     private void ScheduleFlush()
