@@ -24,18 +24,22 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
     private readonly Timer _flushTimer;
+    private readonly LogThrottle _logThrottle;
     private long _snapshotVersion;
     private long _writtenVersion;
+    private int _consecutiveFlushFailures;
     private bool _dirty;
     private bool _disposed;
 
     internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan MaxFlushBackoff = TimeSpan.FromSeconds(30);
 
     public BareBitcoinInvoiceService(ILogger logger, string dataFilePath)
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
         _flushTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
+        _logThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         LoadFromDisk();
     }
 
@@ -129,9 +133,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to serialize tracked invoices");
+            _consecutiveFlushFailures++;
+            _logThrottle.LogWarning(ex, "Failed to serialize tracked invoices");
             if (!_disposed)
-                ScheduleFlush();
+                ScheduleFlush(GetFlushBackoff());
             return;
         }
         finally
@@ -154,10 +159,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             if (version <= _writtenVersion) return;
             await SaveToDiskAsync(json);
             _writtenVersion = version;
+            _consecutiveFlushFailures = 0;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+            _consecutiveFlushFailures++;
+            _logThrottle.LogWarning(ex, "Failed to flush tracked invoices to disk");
 
             try
             {
@@ -172,7 +179,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             {
                 _dirty = true;
                 if (!_disposed)
-                    ScheduleFlush();
+                    ScheduleFlush(GetFlushBackoff());
             }
             finally
             {
@@ -198,13 +205,23 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         _diskWriteLock.Dispose();
     }
 
-    private void ScheduleFlush()
+    internal int ConsecutiveFlushFailures => _consecutiveFlushFailures;
+
+    private void ScheduleFlush() => ScheduleFlush(FlushInterval);
+
+    private void ScheduleFlush(TimeSpan delay)
     {
         try
         {
-            _flushTimer.Change(FlushInterval, Timeout.InfiniteTimeSpan);
+            _flushTimer.Change(delay, Timeout.InfiniteTimeSpan);
         }
         catch (ObjectDisposedException) { }
+    }
+
+    private TimeSpan GetFlushBackoff()
+    {
+        var seconds = FlushInterval.TotalSeconds * Math.Pow(2, _consecutiveFlushFailures);
+        return TimeSpan.FromSeconds(Math.Min(seconds, MaxFlushBackoff.TotalSeconds));
     }
 
     private void LoadFromDisk()
