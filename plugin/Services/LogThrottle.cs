@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
@@ -8,27 +9,28 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// <summary>
 /// Throttles repeated log warnings by message template, logging the first occurrence
 /// immediately and suppressing duplicates for a configurable window.
+/// Uses a monotonic clock source to avoid wall-clock issues such as backward NTP adjustments.
 /// </summary>
 internal class LogThrottle
 {
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
-    private readonly Func<DateTimeOffset> _clock;
+    private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<string, ThrottleState> _states = new();
 
     internal class ThrottleState
     {
-        public DateTimeOffset WindowStart;
+        public long WindowStart;
         public int SuppressedCount;
         public readonly object Lock = new();
     }
 
-    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<DateTimeOffset>? clock = null)
+    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<long>? clock = null)
     {
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
-        _clock = clock ?? (() => DateTimeOffset.UtcNow);
+        _clock = clock ?? Stopwatch.GetTimestamp;
     }
 
     /// <summary>
@@ -37,17 +39,14 @@ internal class LogThrottle
     /// </summary>
     public void LogWarning(Exception ex, string messageTemplate, params object[] args)
     {
-        var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
-        {
-            WindowStart = DateTimeOffset.MinValue
-        });
+        var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState());
 
         lock (state.Lock)
         {
             var now = _clock();
-            var elapsed = now - state.WindowStart;
+            var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
 
-            if (elapsed >= _suppressionWindow || elapsed < TimeSpan.Zero)
+            if (elapsed >= _suppressionWindow)
             {
                 // Window expired (or first call) — emit summary if anything was suppressed
                 if (state.SuppressedCount > 0)
