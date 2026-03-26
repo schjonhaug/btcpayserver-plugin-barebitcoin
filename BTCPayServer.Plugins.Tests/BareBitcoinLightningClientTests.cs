@@ -632,6 +632,39 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("inv-rate-limited", result[0].Id);
     }
 
+    [Fact]
+    public async Task ListInvoices_HandlesNegativeRetryAfter_FallsBackToExponentialBackoff()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-stale-header" });
+
+        var handler = new CountingPerInvoiceHandler((invoiceId, attempt) =>
+        {
+            if (attempt == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                // Set a Retry-After date in the past, which would produce a negative TimeSpan
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                    DateTimeOffset.UtcNow.AddSeconds(-10));
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-stale-header", result[0].Id);
+    }
+
     private sealed class CapturingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();

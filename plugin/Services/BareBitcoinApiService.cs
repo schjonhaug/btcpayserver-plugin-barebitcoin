@@ -218,7 +218,7 @@ public class BareBitcoinApiService
                         retryAfter = date - DateTimeOffset.UtcNow;
 
                     throw new RateLimitedException(
-                        $"Rate limited (429). Response body: {responseContent}",
+                        "Rate limited (429)",
                         retryAfter);
                 }
 

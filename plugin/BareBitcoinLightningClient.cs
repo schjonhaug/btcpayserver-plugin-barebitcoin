@@ -208,9 +208,10 @@ public class BareBitcoinLightningClient : ILightningClient
             catch (HttpRequestException ex) when (
                 attempt < _maxRetries && IsTransientHttpError(ex))
             {
-                var delay = ex is RateLimitedException rle && rle.RetryAfter is { } ra
+                var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
+                var delay = ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero
                     ? ra
-                    : TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
+                    : backoff;
 
                 Logger.LogWarning(ex,
                     "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
