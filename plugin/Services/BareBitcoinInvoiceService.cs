@@ -14,7 +14,7 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// This service acts as the source of truth for which invoices should be monitored across all listener instances.
 /// Provides thread-safe operations for adding, removing, and querying tracked invoices.
 /// Tracked invoices are persisted to disk so they survive server restarts.
-/// Disk writes are debounced to avoid excessive I/O under high invoice throughput.
+/// Disk writes are batched to avoid excessive I/O under high invoice throughput.
 /// </summary>
 public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
@@ -22,23 +22,23 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
-    private readonly Timer _debounceTimer;
+    private readonly Timer _flushTimer;
     private bool _dirty;
     private bool _disposed;
 
-    internal static readonly TimeSpan DebounceInterval = TimeSpan.FromSeconds(1);
+    internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
     public BareBitcoinInvoiceService(ILogger logger, string dataFilePath)
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
-        _debounceTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
+        _flushTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
         LoadFromDisk();
     }
 
     /// <summary>
     /// Adds an invoice to the central tracking registry.
-    /// The change is persisted to disk asynchronously via a debounce timer.
+    /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
     public async Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -62,7 +62,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     /// <summary>
     /// Removes an invoice from the central tracking registry.
-    /// The change is persisted to disk asynchronously via a debounce timer.
+    /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
     public async Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
     {
@@ -138,7 +138,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         if (_disposed) return;
         _disposed = true;
 
-        await _debounceTimer.DisposeAsync();
+        await _flushTimer.DisposeAsync();
         await FlushAsync();
         _invoiceTrackingLock.Dispose();
     }
@@ -147,7 +147,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         try
         {
-            _debounceTimer.Change(DebounceInterval, Timeout.InfiniteTimeSpan);
+            _flushTimer.Change(FlushInterval, Timeout.InfiniteTimeSpan);
         }
         catch (ObjectDisposedException) { }
     }

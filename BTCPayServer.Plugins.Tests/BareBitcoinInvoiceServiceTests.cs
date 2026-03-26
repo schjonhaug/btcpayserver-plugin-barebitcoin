@@ -93,7 +93,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         await service.TrackInvoice("inv-1");
 
-        // Dispose without waiting for debounce timer — should flush
+        // Dispose without waiting for flush timer — should flush
         await service.DisposeAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
