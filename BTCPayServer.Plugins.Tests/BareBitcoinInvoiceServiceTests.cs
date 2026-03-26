@@ -424,10 +424,10 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         for (var i = 0; i < 10; i++)
             await service.FlushAsync();
 
-        var serializeWarnings = logger.Entries
-            .Where(e => e.Level == LogLevel.Warning && e.Message.Contains("Failed to serialize tracked invoices"))
+        var serializeErrors = logger.Entries
+            .Where(e => e.Level == LogLevel.Error && e.Message.Contains("Failed to serialize tracked invoices"))
             .ToList();
-        Assert.Single(serializeWarnings);
+        Assert.Single(serializeErrors);
     }
 
     private class FailingSerializeService : BareBitcoinInvoiceService
