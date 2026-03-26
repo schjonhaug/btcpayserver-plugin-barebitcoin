@@ -33,7 +33,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// <summary>
     /// The exception from the most recent flush failure, or null if the last flush succeeded.
     /// </summary>
-    public Exception? LastFlushException => _lastFlushException;
+    public Exception? LastFlushException => Volatile.Read(ref _lastFlushException);
 
     internal static readonly TimeSpan FlushInterval = TimeSpan.FromSeconds(1);
 
@@ -41,7 +41,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
-        _flushTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
+        _flushTimer = new Timer(async _ =>
+        {
+            try { await FlushAsync().ConfigureAwait(false); }
+            catch (Exception ex) { _logger.LogError(ex, "Unhandled exception in flush timer callback"); }
+        }, null, Timeout.Infinite, Timeout.Infinite);
         LoadFromDisk();
     }
 
@@ -114,58 +118,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
-        string json;
-        long version;
-
         try
         {
-            await _invoiceTrackingLock.WaitAsync();
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
-            if (!_dirty) return;
-            json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
-            _dirty = false;
-            version = ++_snapshotVersion;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to serialize tracked invoices");
-            if (!_disposed)
-                ScheduleFlush();
-            return;
-        }
-        finally
-        {
-            try { _invoiceTrackingLock.Release(); }
-            catch (ObjectDisposedException) { }
-        }
-
-        try
-        {
-            await _diskWriteLock.WaitAsync();
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
-            if (version <= _writtenVersion) return;
-            await SaveToDiskAsync(json);
-            _writtenVersion = version;
-            _lastFlushException = null;
-        }
-        catch (Exception ex)
-        {
-            _lastFlushException = ex;
-            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+            string json;
+            long version;
 
             try
             {
@@ -178,20 +134,75 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
             try
             {
-                _dirty = true;
+                if (!_dirty) return;
+                json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+                _dirty = false;
+                version = ++_snapshotVersion;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to serialize tracked invoices");
                 if (!_disposed)
                     ScheduleFlush();
+                return;
             }
             finally
             {
                 try { _invoiceTrackingLock.Release(); }
                 catch (ObjectDisposedException) { }
             }
+
+            try
+            {
+                await _diskWriteLock.WaitAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                if (version <= _writtenVersion) return;
+                await SaveToDiskAsync(json);
+                _writtenVersion = version;
+                Volatile.Write(ref _lastFlushException, null);
+            }
+            catch (Exception ex)
+            {
+                Volatile.Write(ref _lastFlushException, ex);
+                _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+
+                try
+                {
+                    await _invoiceTrackingLock.WaitAsync();
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    _dirty = true;
+                    if (!_disposed)
+                        ScheduleFlush();
+                }
+                finally
+                {
+                    try { _invoiceTrackingLock.Release(); }
+                    catch (ObjectDisposedException) { }
+                }
+            }
+            finally
+            {
+                try { _diskWriteLock.Release(); }
+                catch (ObjectDisposedException) { }
+            }
         }
-        finally
+        catch (Exception ex)
         {
-            try { _diskWriteLock.Release(); }
-            catch (ObjectDisposedException) { }
+            _logger.LogError(ex, "Unhandled exception in FlushAsync");
         }
     }
 
@@ -203,15 +214,16 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _flushTimer.DisposeAsync();
         await FlushAsync();
 
-        if (_lastFlushException != null)
+        if (Volatile.Read(ref _lastFlushException) != null)
         {
             _logger.LogWarning("Retrying final flush after initial failure during dispose");
             await FlushAsync();
         }
 
-        if (_lastFlushException != null)
+        var finalException = Volatile.Read(ref _lastFlushException);
+        if (finalException != null)
         {
-            _logger.LogError(_lastFlushException,
+            _logger.LogError(finalException,
                 "Final flush failed during dispose — tracked invoice state may be lost on restart");
         }
 
