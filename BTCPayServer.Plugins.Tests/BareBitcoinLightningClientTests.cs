@@ -115,6 +115,18 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_ReturnsNull_OnNotFound()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new ThrowingMessageHandler(
+            new HttpRequestException("not found", null, HttpStatusCode.NotFound));
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.GetInvoice("inv-4");
+        Assert.Null(result);
+    }
+
+    [Fact]
     public async Task GetInvoice_PropagatesHttpRequestException()
     {
         var invoiceService = new ThrowingInvoiceService();
@@ -122,7 +134,7 @@ public class BareBitcoinLightningClientTests
         var client = CreateClient(handler, invoiceService);
 
         await Assert.ThrowsAsync<HttpRequestException>(
-            () => client.GetInvoice("inv-4"));
+            () => client.GetInvoice("inv-5"));
     }
 
     [Fact]
@@ -134,7 +146,7 @@ public class BareBitcoinLightningClientTests
 
         // JObject.Parse throws Newtonsoft JsonReaderException (subclass of JsonException)
         await Assert.ThrowsAsync<Newtonsoft.Json.JsonReaderException>(
-            () => client.GetInvoice("inv-5"));
+            () => client.GetInvoice("inv-6"));
     }
 
     private sealed class FakeMessageHandler(string responseBody) : HttpMessageHandler

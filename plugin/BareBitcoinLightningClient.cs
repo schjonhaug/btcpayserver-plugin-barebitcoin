@@ -61,7 +61,16 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
-        var response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
+        string response;
+        try
+        {
+            response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
+        }
+        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        {
+            Logger.LogWarning("Invoice {InvoiceId} not found (404)", invoiceId);
+            return null;
+        }
         var responseObj = JObject.Parse(response);
 
         var invoice = responseObj["invoice"]?.Value<string>();
