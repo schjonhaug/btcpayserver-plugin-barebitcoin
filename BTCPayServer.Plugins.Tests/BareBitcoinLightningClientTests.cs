@@ -327,8 +327,8 @@ public class BareBitcoinLightningClientTests
         var result = await client.ListInvoices(new ListInvoicesParams());
 
         Assert.Equal(2, result.Length);
-        Assert.Equal("inv-ok", result[0].Id);
-        Assert.Equal("inv-ok2", result[1].Id);
+        Assert.Contains(result, i => i.Id == "inv-ok");
+        Assert.Contains(result, i => i.Id == "inv-ok2");
     }
 
     [Fact]

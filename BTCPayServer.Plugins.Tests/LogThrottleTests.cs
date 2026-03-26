@@ -57,7 +57,7 @@ public class LogThrottleTests
         // Only the first call should have logged
         Assert.Single(_logger.Entries);
 
-        var state = throttle.GetState("Template {Id}");
+        var state = throttle.GetState(LogLevel.Warning, "Template {Id}");
         Assert.NotNull(state);
         Assert.Equal(2, state!.SuppressedCount);
     }
@@ -145,15 +145,53 @@ public class LogThrottleTests
     }
 
     [Fact]
-    public void LogError_ThrottlesSameTemplateAcrossLevels()
+    public void SameTemplate_DifferentLevels_ThrottleIndependently()
     {
         var throttle = CreateThrottle();
 
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
         throttle.LogError(new IOException("disk"), "Template {Id}", "inv-2");
 
-        // Second call uses same template, so it's suppressed even though level differs
-        Assert.Single(_logger.Entries);
+        // Both should log because they are at different levels
+        Assert.Equal(2, _logger.Entries.Count);
+        Assert.Equal(LogLevel.Warning, _logger.Entries[0].Level);
+        Assert.Equal(LogLevel.Error, _logger.Entries[1].Level);
+    }
+
+    [Fact]
+    public void SameTemplate_DifferentLevels_SuppressedCountsAreIsolated()
+    {
+        var throttle = CreateThrottle();
+
+        // First calls at each level — both log immediately
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Suppress further calls at each level within the window
+        Advance(TimeSpan.FromSeconds(30));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-4");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-5");
+
+        // Advance past window and trigger both levels again
+        Advance(TimeSpan.FromMinutes(5));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-6");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-7");
+
+        // Expected entries:
+        // 0: Warning inv-1 (first call)
+        // 1: Error inv-2 (first call)
+        // 2: Warning summary "Suppressed 2"
+        // 3: Warning inv-6
+        // 4: Error summary "Suppressed 1"
+        // 5: Error inv-7
+        Assert.Equal(6, _logger.Entries.Count);
+
+        Assert.Equal(LogLevel.Warning, _logger.Entries[2].Level);
+        Assert.Contains("Suppressed 2", _logger.Entries[2].Message);
+
+        Assert.Equal(LogLevel.Error, _logger.Entries[4].Level);
+        Assert.Contains("Suppressed 1", _logger.Entries[4].Message);
     }
 
     [Fact]
@@ -187,13 +225,14 @@ public class LogThrottleTests
         Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
 
-        // Advance past the window and log at Error level
+        // Advance past the window and log at Warning level again
         Advance(TimeSpan.FromMinutes(5));
-        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-3");
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
 
-        // Summary should be at Error (caller's level is higher than suppressed Warning)
+        // Summary (entry[1]) should be at Warning level (the highest severity seen, which is Warning)
+
         Assert.Equal(3, _logger.Entries.Count);
-        Assert.Equal(LogLevel.Error, _logger.Entries[1].Level);
+        Assert.Equal(LogLevel.Warning, _logger.Entries[1].Level);
         Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
     }
 
@@ -206,7 +245,7 @@ public class LogThrottleTests
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
 
         Assert.Empty(_logger.Entries);
-        Assert.Null(throttle.GetState("Template {Id}"));
+        Assert.Null(throttle.GetState(LogLevel.Warning, "Template {Id}"));
     }
 
     [Fact]
@@ -220,6 +259,80 @@ public class LogThrottleTests
 
         Assert.Single(_logger.Entries);
         Assert.Contains("Template inv-1", _logger.Entries[0].Message);
+    }
+
+    [Fact]
+    public void StaleEntries_AreEvictedWhenThresholdExceeded()
+    {
+        var throttle = CreateThrottle();
+
+        // Add 11 distinct templates to exceed the threshold
+        for (var i = 0; i < 11; i++)
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+
+        Assert.Equal(11, throttle.StateCount);
+
+        // Advance past the suppression window so all entries become stale
+        Advance(_window);
+
+        // Next call triggers eviction — stale entries are removed, only the new one remains
+        throttle.LogWarning(new IOException("disk"), "Fresh {Id}", "inv");
+        Assert.Equal(1, throttle.StateCount);
+        Assert.NotNull(throttle.GetState(LogLevel.Warning, "Fresh {Id}"));
+    }
+
+    [Fact]
+    public void ActiveEntries_AreNotEvicted()
+    {
+        var throttle = CreateThrottle();
+
+        for (var i = 0; i < 11; i++)
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+
+        // Don't advance clock — entries are still within their window
+        throttle.LogWarning(new IOException("disk"), "Extra {Id}", "inv");
+        Assert.Equal(12, throttle.StateCount);
+    }
+
+    [Fact]
+    public void Eviction_FlushesSuppressedCountSummary()
+    {
+        var throttle = CreateThrottle();
+
+        // Create 11 templates, each with a suppressed call
+        for (var i = 0; i < 11; i++)
+        {
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+            Advance(TimeSpan.FromSeconds(1));
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv"); // suppressed
+        }
+
+        _logger.Entries.Clear();
+
+        // Advance past window and trigger eviction
+        Advance(_window);
+        throttle.LogWarning(new IOException("disk"), "Fresh {Id}", "inv");
+
+        // Each of the 11 stale entries had SuppressedCount=1, so 11 summary logs + 1 fresh warning
+        var summaries = _logger.Entries.FindAll(e => e.Message.Contains("Suppressed 1"));
+        Assert.Equal(11, summaries.Count);
+    }
+
+    [Fact]
+    public void BelowThreshold_NoEvictionOccurs()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "A {Id}", "inv");
+        throttle.LogWarning(new IOException("disk"), "B {Id}", "inv");
+        throttle.LogWarning(new IOException("disk"), "C {Id}", "inv");
+
+        // Advance past window — entries are stale but count (3) is below threshold
+        Advance(_window);
+        throttle.LogWarning(new IOException("disk"), "A {Id}", "inv");
+
+        // All 3 entries still present — no eviction triggered
+        Assert.Equal(3, throttle.StateCount);
     }
 
     [Theory]
