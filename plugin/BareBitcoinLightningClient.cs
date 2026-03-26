@@ -32,6 +32,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly int _maxPollConcurrency;
     private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
+    internal readonly ConcurrentDictionary<string, DateTimeOffset> RateLimitBackoff = new();
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
@@ -196,11 +197,21 @@ public class BareBitcoinLightningClient : ILightningClient
         var maxDelay = TimeSpan.FromSeconds(30);
         var maxRateLimitDelay = TimeSpan.FromSeconds(60);
 
+        if (RateLimitBackoff.TryGetValue(invoiceId, out var notBefore) && DateTimeOffset.UtcNow < notBefore)
+        {
+            Logger.LogDebug(
+                "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
+                invoiceId, notBefore);
+            return null;
+        }
+
         for (var attempt = 0; ; attempt++)
         {
             try
             {
-                return await GetInvoice(invoiceId, cancellation);
+                var result = await GetInvoice(invoiceId, cancellation);
+                RateLimitBackoff.TryRemove(invoiceId, out _);
+                return result;
             }
             catch (HttpRequestException ex) when (
                 ex.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden)
@@ -214,8 +225,9 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     if (ra > maxRateLimitDelay)
                     {
+                        RateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + ra;
                         Logger.LogWarning(
-                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, skipping until next poll cycle",
+                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {RetryAfter}s",
                             invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
                         return null;
                     }

@@ -762,6 +762,79 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("inv-no-header", result[0].Id);
     }
 
+    [Fact]
+    public async Task ListInvoices_DeferredInvoiceSkippedWithoutApiCall()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-deferred" });
+
+        var attemptCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, _) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent("rate limited")
+            };
+            response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+            return Task.FromResult(response);
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        // First call: hits the API, gets 429 with large Retry-After, records backoff
+        var result1 = await client.ListInvoices(new ListInvoicesParams());
+        Assert.Empty(result1);
+        Assert.Equal(1, attemptCount);
+
+        // Second call: invoice is deferred, no API call made
+        var result2 = await client.ListInvoices(new ListInvoicesParams());
+        Assert.Empty(result2);
+        Assert.Equal(1, attemptCount); // No additional API calls
+    }
+
+    [Fact]
+    public async Task ListInvoices_SuccessfulFetchClearsBackoff()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-recover" });
+
+        var callCount = 0;
+        var handler = new CountingPerInvoiceHandler((_, _) =>
+        {
+            var count = Interlocked.Increment(ref callCount);
+            if (count == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(TimeSpan.FromSeconds(120));
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        // First call: triggers backoff
+        var result1 = await client.ListInvoices(new ListInvoicesParams());
+        Assert.Empty(result1);
+        Assert.Equal(1, callCount);
+
+        // Simulate backoff expiry by setting the timestamp to the past
+        client.RateLimitBackoff["inv-recover"] = DateTimeOffset.UtcNow.AddSeconds(-1);
+
+        // Next call: backoff expired, makes API call, succeeds, clears backoff
+        var result2 = await client.ListInvoices(new ListInvoicesParams());
+        Assert.Single(result2);
+        Assert.Equal(2, callCount);
+        Assert.Empty(client.RateLimitBackoff);
+    }
+
     private sealed class CapturingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
