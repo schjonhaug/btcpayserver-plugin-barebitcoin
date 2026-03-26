@@ -114,6 +114,29 @@ public class BareBitcoinLightningClientTests
             => Task.FromResult<IReadOnlyCollection<string>>(Array.Empty<string>());
     }
 
+    [Fact]
+    public async Task GetInvoice_PropagatesHttpRequestException()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new ThrowingMessageHandler(new HttpRequestException("connection refused"));
+        var client = CreateClient(handler, invoiceService);
+
+        await Assert.ThrowsAsync<HttpRequestException>(
+            () => client.GetInvoice("inv-4"));
+    }
+
+    [Fact]
+    public async Task GetInvoice_PropagatesJsonException()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new FakeMessageHandler("not valid json {{{");
+        var client = CreateClient(handler, invoiceService);
+
+        // JObject.Parse throws Newtonsoft JsonReaderException (subclass of JsonException)
+        await Assert.ThrowsAsync<Newtonsoft.Json.JsonReaderException>(
+            () => client.GetInvoice("inv-5"));
+    }
+
     private sealed class FakeMessageHandler(string responseBody) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -123,6 +146,15 @@ public class BareBitcoinLightningClientTests
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
             });
+        }
+    }
+
+    private sealed class ThrowingMessageHandler(Exception exception) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            return Task.FromException<HttpResponseMessage>(exception);
         }
     }
 }

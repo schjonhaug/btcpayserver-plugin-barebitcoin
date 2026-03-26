@@ -61,89 +61,76 @@ public class BareBitcoinLightningClient : ILightningClient
         CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
-        try
+        var response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
+        var responseObj = JObject.Parse(response);
+
+        var invoice = responseObj["invoice"]?.Value<string>();
+        if (string.IsNullOrEmpty(invoice))
         {
-            var response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
-            var responseObj = JObject.Parse(response);
-
-            var invoice = responseObj["invoice"]?.Value<string>();
-            if (string.IsNullOrEmpty(invoice))
-            {
-                Logger.LogWarning("Invoice {InvoiceId} not found or empty response", invoiceId);
-                return null;
-            }
-
-            var status = responseObj["status"]?.Value<string>() switch
-            {
-                "INVOICE_STATUS_UNPAID" => LightningInvoiceStatus.Unpaid,
-                "INVOICE_STATUS_PAID" => LightningInvoiceStatus.Paid,
-                "INVOICE_STATUS_EXPIRED" => LightningInvoiceStatus.Expired,
-                "INVOICE_STATUS_CANCELED" => LightningInvoiceStatus.Expired,
-                _ => LightningInvoiceStatus.Unpaid // Default case
-            };
-
-            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
-            var amount = bolt11.MinimumAmount;
-            var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
-            var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
-            var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
-            var preimage = status == LightningInvoiceStatus.Paid ? 
-                (responseObj["preimage"]?.Value<string>() ?? paymentHash) : 
-                null;
-
-            var result = new LightningInvoice
-            {
-                Id = invoiceId,
-                BOLT11 = invoice,
-                Status = status,
-                Amount = amount,
-                AmountReceived = amountReceived,
-                ExpiresAt = bolt11.ExpiryDate,
-                PaymentHash = paymentHash,
-                PaidAt = paidAt,
-                Preimage = preimage
-            };
-
-            // Persist tracking as best-effort: a disk error must not prevent
-            // returning the valid invoice we already have from the API.
-            if (status == LightningInvoiceStatus.Unpaid)
-            {
-                try
-                {
-                    await _invoiceService.TrackInvoice(invoiceId, cancellation);
-                }
-                catch (IOException ex)
-                {
-                    _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
-                }
-            }
-            else if (status == LightningInvoiceStatus.Expired)
-            {
-                try
-                {
-                    await _invoiceService.UntrackInvoice(invoiceId, cancellation);
-                }
-                catch (IOException ex)
-                {
-                    _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
-                }
-            }
-
-            Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}", 
-                result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage);
-
-            return result;
-        }
-        catch (HttpRequestException ex)
-        {
-            Logger.LogError(ex, "Network error getting invoice {InvoiceId} from BareBitcoin", invoiceId);
+            Logger.LogWarning("Invoice {InvoiceId} not found or empty response", invoiceId);
             return null;
         }
-        catch (JsonException ex)
+
+        var status = responseObj["status"]?.Value<string>() switch
         {
-            Logger.LogError(ex, "JSON parsing error getting invoice {InvoiceId} from BareBitcoin", invoiceId);
-            return null;
+            "INVOICE_STATUS_UNPAID" => LightningInvoiceStatus.Unpaid,
+            "INVOICE_STATUS_PAID" => LightningInvoiceStatus.Paid,
+            "INVOICE_STATUS_EXPIRED" => LightningInvoiceStatus.Expired,
+            "INVOICE_STATUS_CANCELED" => LightningInvoiceStatus.Expired,
+            _ => LightningInvoiceStatus.Unpaid // Default case
+        };
+
+        var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+        var amount = bolt11.MinimumAmount;
+        var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
+        var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
+        var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
+        var preimage = status == LightningInvoiceStatus.Paid ?
+            (responseObj["preimage"]?.Value<string>() ?? paymentHash) :
+            null;
+
+        var result = new LightningInvoice
+        {
+            Id = invoiceId,
+            BOLT11 = invoice,
+            Status = status,
+            Amount = amount,
+            AmountReceived = amountReceived,
+            ExpiresAt = bolt11.ExpiryDate,
+            PaymentHash = paymentHash,
+            PaidAt = paidAt,
+            Preimage = preimage
+        };
+
+        // Persist tracking as best-effort: a disk error must not prevent
+        // returning the valid invoice we already have from the API.
+        if (status == LightningInvoiceStatus.Unpaid)
+        {
+            try
+            {
+                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+            }
+            catch (IOException ex)
+            {
+                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
+            }
         }
+        else if (status == LightningInvoiceStatus.Expired)
+        {
+            try
+            {
+                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+            }
+            catch (IOException ex)
+            {
+                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+            }
+        }
+
+        Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}",
+            result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage);
+
+        return result;
     }
 
     public LightningInvoice? ToInvoice(JObject invoice)

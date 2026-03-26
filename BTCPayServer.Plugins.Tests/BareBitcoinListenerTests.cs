@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Lightning;
@@ -326,6 +327,35 @@ public class BareBitcoinListenerTests : IDisposable
 
         Assert.True(sawBackoff, "Should have observed backoff");
         Assert.Equal(TimeSpan.FromSeconds(2), listener.CurrentPollDelay);
+
+        listener.Dispose();
+    }
+
+    [Fact]
+    public async Task AdaptiveBackoff_ActivatesOnHttpRequestException()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+        await invoiceService.TrackInvoice("inv-2");
+
+        var cycleCount = 0;
+        var thirdCycleStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var client = new FakeLightningClient((_, _) =>
+        {
+            var count = Interlocked.Increment(ref cycleCount);
+            if (count >= 6) // 3 cycles * 2 invoices = 6 calls
+                thirdCycleStarted.TrySetResult();
+            throw new HttpRequestException("connection refused");
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 100, maxPollConcurrency: 10);
+
+        await thirdCycleStarted.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        Assert.True(listener.CurrentPollDelay > TimeSpan.FromSeconds(2),
+            $"Expected backoff > 2s, got {listener.CurrentPollDelay.TotalSeconds}s");
 
         listener.Dispose();
     }
