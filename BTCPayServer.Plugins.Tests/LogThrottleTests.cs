@@ -120,6 +120,74 @@ public class LogThrottleTests
     }
 
     [Fact]
+    public void LogWarning_WithNullException_LogsSuccessfully()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(null, "Template {Id}", "inv-1");
+
+        Assert.Single(_logger.Entries);
+        Assert.Null(_logger.Entries[0].Exception);
+        Assert.Equal(LogLevel.Warning, _logger.Entries[0].Level);
+    }
+
+    [Fact]
+    public void LogError_LogsAtErrorLevel()
+    {
+        var throttle = CreateThrottle();
+        var ex = new IOException("disk full");
+
+        throttle.LogError(ex, "Template {Id}", "inv-1");
+
+        Assert.Single(_logger.Entries);
+        Assert.Same(ex, _logger.Entries[0].Exception);
+        Assert.Equal(LogLevel.Error, _logger.Entries[0].Level);
+    }
+
+    [Fact]
+    public void LogError_ThrottlesSameTemplateAcrossLevels()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Second call uses same template, so it's suppressed even though level differs
+        Assert.Single(_logger.Entries);
+    }
+
+    [Fact]
+    public void Log_SummaryUsesCallerLogLevel()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        Advance(TimeSpan.FromSeconds(30));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Advance past the window and log at Error level
+        Advance(TimeSpan.FromMinutes(5));
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-3");
+
+        // Summary (entry[1]) should be at Error level (the caller's level)
+        Assert.Equal(3, _logger.Entries.Count);
+        Assert.Equal(LogLevel.Error, _logger.Entries[1].Level);
+        Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
+    }
+
+    [Fact]
+    public void DisabledLogLevel_SkipsThrottleEntirely()
+    {
+        _logger.EnabledLevel = LogLevel.Error;
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+
+        Assert.Empty(_logger.Entries);
+        Assert.Null(throttle.GetState("Template {Id}"));
+    }
+
+    [Fact]
     public void FirstCall_LogsImmediately_EvenWithLowTimestamp()
     {
         // Simulate early boot: timestamp near zero, less than the suppression window
@@ -144,6 +212,7 @@ public class LogThrottleTests
     private class RecordingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
+        public LogLevel EnabledLevel { get; set; } = LogLevel.Trace;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
@@ -155,7 +224,7 @@ public class LogThrottleTests
             });
         }
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= EnabledLevel;
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 
