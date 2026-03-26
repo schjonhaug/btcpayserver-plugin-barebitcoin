@@ -171,6 +171,18 @@ public class LogThrottleTests
         Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
     }
 
+    [Fact]
+    public void DisabledLogLevel_SkipsThrottleEntirely()
+    {
+        _logger.EnabledLevel = LogLevel.Error;
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+
+        Assert.Empty(_logger.Entries);
+        Assert.Null(throttle.GetState("Template {Id}"));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -183,6 +195,7 @@ public class LogThrottleTests
     private class RecordingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
+        public LogLevel EnabledLevel { get; set; } = LogLevel.Trace;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
@@ -194,7 +207,7 @@ public class LogThrottleTests
             });
         }
 
-        public bool IsEnabled(LogLevel logLevel) => true;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= EnabledLevel;
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
     }
 
