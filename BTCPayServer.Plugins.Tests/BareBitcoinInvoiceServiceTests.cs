@@ -1,3 +1,4 @@
+using System.Collections.Generic;
 using System.IO;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
@@ -112,5 +113,86 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         Assert.True(File.Exists(FilePath));
         var json = File.ReadAllText(FilePath);
         Assert.Contains("inv-1", json);
+    }
+
+    [Fact]
+    public async Task ConcurrentFlushAsync_DoesNotCorruptPersistedFile()
+    {
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        for (var i = 0; i < 20; i++)
+            await service.TrackInvoice($"inv-{i}");
+
+        var tasks = new List<Task>();
+        for (var i = 0; i < 10; i++)
+            tasks.Add(service.FlushAsync());
+        for (var i = 20; i < 30; i++)
+            tasks.Add(service.TrackInvoice($"inv-{i}"));
+        // Untrack some of the initial invoices concurrently
+        for (var i = 10; i < 15; i++)
+            tasks.Add(service.UntrackInvoice($"inv-{i}"));
+        await Task.WhenAll(tasks);
+
+        await service.FlushAsync();
+
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        var tracked = await service2.GetTrackedInvoices();
+
+        // inv-0..9 tracked, inv-10..14 untracked, inv-15..29 tracked
+        for (var i = 0; i < 10; i++)
+            Assert.Contains($"inv-{i}", tracked);
+        for (var i = 10; i < 15; i++)
+            Assert.DoesNotContain($"inv-{i}", tracked);
+        for (var i = 15; i < 30; i++)
+            Assert.Contains($"inv-{i}", tracked);
+        Assert.Equal(25, tracked.Count);
+    }
+
+    [Fact]
+    public async Task FailedDiskWrite_RemarksAsDirtyAndRetriesSuccessfully()
+    {
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await service.TrackInvoice("inv-1");
+
+        var tmpPath = FilePath + ".tmp";
+        Directory.CreateDirectory(tmpPath);
+
+        try
+        {
+            await service.FlushAsync();
+            Assert.False(File.Exists(FilePath));
+        }
+        finally
+        {
+            Directory.Delete(tmpPath, recursive: true);
+        }
+
+        await service.FlushAsync();
+
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        var tracked = await service2.GetTrackedInvoices();
+        Assert.Contains("inv-1", tracked);
+    }
+
+    [Fact]
+    public async Task DisposeAsync_DuringFlush_DoesNotLoseData()
+    {
+        var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        for (var i = 0; i < 10; i++)
+            await service.TrackInvoice($"inv-{i}");
+
+        var flushTask = service.FlushAsync();
+        var disposeTask = service.DisposeAsync();
+
+        await flushTask;
+        await disposeTask;
+
+        await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        var tracked = await service2.GetTrackedInvoices();
+
+        for (var i = 0; i < 10; i++)
+            Assert.Contains($"inv-{i}", tracked);
+        Assert.Equal(10, tracked.Count);
     }
 }
