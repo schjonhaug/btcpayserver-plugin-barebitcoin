@@ -23,7 +23,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private readonly Channel<LightningInvoice> _invoices;
     
     // Cancellation and task management
-    private readonly CancellationTokenSource _cts = new CancellationTokenSource();
+    private readonly CancellationTokenSource _cts;
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
     
