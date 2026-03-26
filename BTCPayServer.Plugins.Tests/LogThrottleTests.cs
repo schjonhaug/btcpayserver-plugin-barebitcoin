@@ -23,7 +23,20 @@ public class LogThrottleTests
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
 
         Assert.Single(_logger.Entries);
-        Assert.Contains("Template {Id}", _logger.Entries[0].Message);
+        Assert.Contains("Template inv-1", _logger.Entries[0].Message);
+    }
+
+    [Fact]
+    public void FirstCall_PassesExceptionToLogger()
+    {
+        var throttle = CreateThrottle();
+        var ex = new IOException("disk full");
+
+        throttle.LogWarning(ex, "Template {Id}", "inv-1");
+
+        Assert.Single(_logger.Entries);
+        Assert.Same(ex, _logger.Entries[0].Exception);
+        Assert.Equal(LogLevel.Warning, _logger.Entries[0].Level);
     }
 
     [Fact]
@@ -63,7 +76,7 @@ public class LogThrottleTests
         // Should have: initial warning, summary, new warning
         Assert.Equal(3, _logger.Entries.Count);
         Assert.Contains("Suppressed 2", _logger.Entries[1].Message);
-        Assert.Contains("Template {Id}", _logger.Entries[2].Message);
+        Assert.Contains("Template inv-4", _logger.Entries[2].Message);
     }
 
     [Fact]

@@ -30,6 +30,10 @@ internal class LogThrottle
         _clock = clock ?? (() => DateTimeOffset.UtcNow);
     }
 
+    /// <summary>
+    /// Logs a warning, throttling repeated calls with the same <paramref name="messageTemplate"/>.
+    /// The template must be a static string literal; dynamic templates will cause unbounded memory growth.
+    /// </summary>
     public void LogWarning(Exception ex, string messageTemplate, params object[] args)
     {
         var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
@@ -48,7 +52,7 @@ internal class LogThrottle
                 if (state.SuppressedCount > 0)
                 {
                     _logger.LogWarning(
-                        "Suppressed {SuppressedCount} repeated persistence warning(s) for \"{MessageTemplate}\" over the last {Window}",
+                        "Suppressed {SuppressedCount} repeated warning(s) for \"{MessageTemplate}\" over the last {Window}",
                         state.SuppressedCount, messageTemplate, _suppressionWindow);
                 }
 
