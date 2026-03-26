@@ -309,6 +309,11 @@ public class BareBitcoinLightningClient : ILightningClient
                 {
                     throw;
                 }
+                catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.TooManyRequests)
+                {
+                    Logger.LogDebug("Skipping invoice {InvoiceId} due to active rate-limit backoff", invoiceId);
+                    return;
+                }
                 catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException)
                 {
                     Logger.LogWarning(ex, "Skipping invoice {InvoiceId} due to error", invoiceId);
