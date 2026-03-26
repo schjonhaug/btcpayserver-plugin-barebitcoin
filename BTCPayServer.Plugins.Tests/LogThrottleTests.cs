@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -310,6 +312,41 @@ public class LogThrottleTests
 
         // All 3 entries still present — no eviction triggered
         Assert.Equal(3, throttle.StateCount);
+    }
+
+    [Fact]
+    public void ConcurrentEviction_DoesNotThrowOrCorruptState()
+    {
+        var logger = new RecordingLogger();
+        long now = Stopwatch.GetTimestamp();
+        var window = TimeSpan.FromMinutes(5);
+        var throttle = new LogThrottle(logger, window, () => Volatile.Read(ref now));
+
+        // Fill past the eviction threshold with stale entries
+        for (var i = 0; i < 20; i++)
+            throttle.Log(LogLevel.Warning, null, $"Template{i} {{Id}}", "inv");
+
+        // Advance past the window so all entries are stale
+        Interlocked.Exchange(ref now, now + (long)(window.TotalSeconds * Stopwatch.Frequency));
+
+        // Hammer eviction from many threads simultaneously
+        var barrier = new Barrier(participantCount: 8);
+        var tasks = new Task[8];
+        for (var t = 0; t < tasks.Length; t++)
+        {
+            var threadId = t;
+            tasks[t] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (var i = 0; i < 50; i++)
+                    throttle.Log(LogLevel.Warning, null, $"Concurrent{threadId}_{i} {{Id}}", "inv");
+            });
+        }
+
+        Task.WaitAll(tasks);
+
+        // All tasks completed without exceptions; state is consistent
+        Assert.True(throttle.StateCount > 0);
     }
 
     [Theory]

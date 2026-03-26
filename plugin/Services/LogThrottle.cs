@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Threading;
 using Microsoft.Extensions.Logging;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
@@ -19,6 +20,7 @@ internal class LogThrottle
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<(LogLevel, string), ThrottleState> _states = new();
+    private int _isEvicting;
 
     internal class ThrottleState
     {
@@ -94,34 +96,42 @@ internal class LogThrottle
 
     private void EvictStaleEntries()
     {
-        var now = _clock();
-        foreach (var kvp in _states)
+        if (Interlocked.Exchange(ref _isEvicting, 1) == 1) return;
+        try
         {
-            var state = kvp.Value;
-            lock (state.Lock)
+            var now = _clock();
+            foreach (var kvp in _states)
             {
-                if (state.IsFirstCall)
-                    continue;
-
-                var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
-                if (elapsed >= _suppressionWindow)
+                var state = kvp.Value;
+                lock (state.Lock)
                 {
-                    // Remove only if the value still matches the instance we checked,
-                    // avoiding accidental removal of a concurrently recreated entry.
-                    // Only the thread that successfully removes the entry emits the summary,
-                    // preventing duplicate logs under concurrent eviction.
-                    if (!((ICollection<KeyValuePair<(LogLevel, string), ThrottleState>>)_states).Remove(kvp))
+                    if (state.IsFirstCall)
                         continue;
 
-                    if (state.SuppressedCount > 0)
+                    var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
+                    if (elapsed >= _suppressionWindow)
                     {
-                        var (level, template) = kvp.Key;
-                        _logger.Log(level,
-                            "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
-                            state.SuppressedCount, template, _suppressionWindow);
+                        // Remove only if the value still matches the instance we checked,
+                        // avoiding accidental removal of a concurrently recreated entry.
+                        // Only the thread that successfully removes the entry emits the summary,
+                        // preventing duplicate logs under concurrent eviction.
+                        if (!((ICollection<KeyValuePair<(LogLevel, string), ThrottleState>>)_states).Remove(kvp))
+                            continue;
+
+                        if (state.SuppressedCount > 0)
+                        {
+                            var (level, template) = kvp.Key;
+                            _logger.Log(level,
+                                "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
+                                state.SuppressedCount, template, _suppressionWindow);
+                        }
                     }
                 }
             }
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isEvicting, 0);
         }
     }
 
