@@ -135,7 +135,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     if (invoice == null)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} no longer exists, removing from tracking list", invoiceId);
-                        await TryUntrackInvoice(invoiceId);
+                        if (await TryUntrackInvoice(invoiceId))
+                            _deliveredPaidInvoices.Remove(invoiceId);
                         continue;
                     }
 
@@ -156,7 +157,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
                         _logger.LogInformation("Invoice {InvoiceId} has expired, removing from tracking list", invoiceId);
-                        await TryUntrackInvoice(invoiceId);
+                        if (await TryUntrackInvoice(invoiceId))
+                            _deliveredPaidInvoices.Remove(invoiceId);
                     }
                 }
 
