@@ -84,21 +84,16 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
-    public async Task GetInvoice_ReturnsNull_WhenTrackInvoiceThrowsOperationCanceledException()
+    public async Task GetInvoice_PropagatesOperationCanceledException_FromTrackInvoice()
     {
-        // The outer catch (Exception) in GetInvoice currently swallows
-        // OperationCanceledException and returns null.
-        // This test documents that behavior. See issue #39 note on whether
-        // OperationCanceledException should instead propagate.
         var invoiceService = new ThrowingInvoiceService(
             trackException: new OperationCanceledException("token cancelled"));
 
         var handler = new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID"));
         var client = CreateClient(handler, invoiceService);
 
-        var result = await client.GetInvoice("inv-3");
-
-        Assert.Null(result);
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => client.GetInvoice("inv-3"));
     }
 
     private sealed class ThrowingInvoiceService(
