@@ -35,7 +35,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     {
         _logger = logger;
         _dataFilePath = dataFilePath;
-        _flushTimer = new Timer(_ => _ = FlushAsync(), null, Timeout.Infinite, Timeout.Infinite);
+        _flushTimer = new Timer(async _ =>
+        {
+            try { await FlushAsync().ConfigureAwait(false); }
+            catch (Exception ex) { _logger.LogError(ex, "Unhandled exception in flush timer callback"); }
+        }, null, Timeout.Infinite, Timeout.Infinite);
         LoadFromDisk();
     }
 
@@ -108,56 +112,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
-        string json;
-        long version;
-
         try
         {
-            await _invoiceTrackingLock.WaitAsync();
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
-            if (!_dirty) return;
-            json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
-            _dirty = false;
-            version = ++_snapshotVersion;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to serialize tracked invoices");
-            if (!_disposed)
-                ScheduleFlush();
-            return;
-        }
-        finally
-        {
-            try { _invoiceTrackingLock.Release(); }
-            catch (ObjectDisposedException) { }
-        }
-
-        try
-        {
-            await _diskWriteLock.WaitAsync();
-        }
-        catch (ObjectDisposedException)
-        {
-            return;
-        }
-
-        try
-        {
-            if (version <= _writtenVersion) return;
-            await SaveToDiskAsync(json);
-            _writtenVersion = version;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+            string json;
+            long version;
 
             try
             {
@@ -170,20 +128,73 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
             try
             {
-                _dirty = true;
+                if (!_dirty) return;
+                json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+                _dirty = false;
+                version = ++_snapshotVersion;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to serialize tracked invoices");
                 if (!_disposed)
                     ScheduleFlush();
+                return;
             }
             finally
             {
                 try { _invoiceTrackingLock.Release(); }
                 catch (ObjectDisposedException) { }
             }
+
+            try
+            {
+                await _diskWriteLock.WaitAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                if (version <= _writtenVersion) return;
+                await SaveToDiskAsync(json);
+                _writtenVersion = version;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+
+                try
+                {
+                    await _invoiceTrackingLock.WaitAsync();
+                }
+                catch (ObjectDisposedException)
+                {
+                    return;
+                }
+
+                try
+                {
+                    _dirty = true;
+                    if (!_disposed)
+                        ScheduleFlush();
+                }
+                finally
+                {
+                    try { _invoiceTrackingLock.Release(); }
+                    catch (ObjectDisposedException) { }
+                }
+            }
+            finally
+            {
+                try { _diskWriteLock.Release(); }
+                catch (ObjectDisposedException) { }
+            }
         }
-        finally
+        catch (Exception ex)
         {
-            try { _diskWriteLock.Release(); }
-            catch (ObjectDisposedException) { }
+            _logger.LogError(ex, "Unhandled exception in FlushAsync");
         }
     }
 

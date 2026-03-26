@@ -50,7 +50,7 @@ internal class LogThrottle
             var now = _clock();
             var elapsed = now - state.WindowStart;
 
-            if (elapsed >= _suppressionWindow)
+            if (elapsed >= _suppressionWindow || elapsed < TimeSpan.Zero)
             {
                 // Window expired (or first call) — emit summary if anything was suppressed
                 if (state.SuppressedCount > 0)
