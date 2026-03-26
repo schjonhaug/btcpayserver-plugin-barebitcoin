@@ -835,6 +835,51 @@ public class BareBitcoinLightningClientTests
         Assert.Equal(0, client.RateLimitBackoffCount);
     }
 
+    [Fact]
+    public async Task ListInvoices_PrunesBackoffForUntrackedInvoices()
+    {
+        // Start with one tracked invoice
+        var trackedSet = new HashSet<string> { "inv-tracked" };
+        var invoiceService = new MutableInvoiceService(trackedSet);
+
+        var handler = new CountingPerInvoiceHandler((_, _) =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            }));
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        // Seed backoff for both a tracked and an untracked invoice
+        client.SetRateLimitBackoff("inv-tracked", DateTimeOffset.UtcNow.AddMinutes(5));
+        client.SetRateLimitBackoff("inv-gone", DateTimeOffset.UtcNow.AddMinutes(5));
+        Assert.Equal(2, client.RateLimitBackoffCount);
+
+        // ListInvoices should prune the untracked entry
+        await client.ListInvoices(new ListInvoicesParams());
+
+        // "inv-gone" should have been pruned; "inv-tracked" still deferred
+        Assert.Equal(1, client.RateLimitBackoffCount);
+    }
+
+    private sealed class MutableInvoiceService(HashSet<string> tracked) : IBareBitcoinInvoiceService
+    {
+        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        {
+            tracked.Add(invoiceId);
+            return Task.CompletedTask;
+        }
+
+        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        {
+            tracked.Remove(invoiceId);
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+            => Task.FromResult<IReadOnlyCollection<string>>(new HashSet<string>(tracked));
+    }
+
     private sealed class CapturingLogger : ILogger
     {
         public List<LogEntry> Entries { get; } = new();
