@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 
@@ -12,6 +13,8 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// </summary>
 internal class LogThrottle
 {
+    private const int MaxEntries = 10;
+
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
@@ -35,8 +38,9 @@ internal class LogThrottle
 
     /// <summary>
     /// Logs a message at the specified level, throttling repeated calls with the same
-    /// <paramref name="messageTemplate"/>. The template must be a static string literal;
-    /// dynamic templates will cause unbounded memory growth.
+    /// <paramref name="messageTemplate"/>. The template should be a static string literal.
+    /// Dynamic templates are tolerated—stale entries are evicted—but active-window growth
+    /// is unbounded; prefer static templates.
     /// </summary>
     public void Log(LogLevel logLevel, Exception? ex, string messageTemplate, params object[] args)
     {
@@ -74,6 +78,41 @@ internal class LogThrottle
                 state.SuppressedCount++;
             }
         }
+
+        if (_states.Count > MaxEntries)
+            EvictStaleEntries();
+    }
+
+    private void EvictStaleEntries()
+    {
+        var now = _clock();
+        foreach (var kvp in _states)
+        {
+            var state = kvp.Value;
+            lock (state.Lock)
+            {
+                if (state.IsFirstCall)
+                    continue;
+
+                var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
+                if (elapsed >= _suppressionWindow)
+                {
+                    // Remove only if the value still matches the instance we checked,
+                    // avoiding accidental removal of a concurrently recreated entry.
+                    // Only the thread that successfully removes the entry emits the summary,
+                    // preventing duplicate logs under concurrent eviction.
+                    if (!((ICollection<KeyValuePair<string, ThrottleState>>)_states).Remove(kvp))
+                        continue;
+
+                    if (state.SuppressedCount > 0)
+                    {
+                        _logger.LogWarning(
+                            "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
+                            state.SuppressedCount, kvp.Key, _suppressionWindow);
+                    }
+                }
+            }
+        }
     }
 
     /// <summary>
@@ -96,4 +135,9 @@ internal class LogThrottle
         _states.TryGetValue(messageTemplate, out var state);
         return state;
     }
+
+    /// <summary>
+    /// Returns the number of tracked message templates (for testing).
+    /// </summary>
+    internal int StateCount => _states.Count;
 }

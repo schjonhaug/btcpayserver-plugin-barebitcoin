@@ -200,6 +200,80 @@ public class LogThrottleTests
         Assert.Contains("Template inv-1", _logger.Entries[0].Message);
     }
 
+    [Fact]
+    public void StaleEntries_AreEvictedWhenThresholdExceeded()
+    {
+        var throttle = CreateThrottle();
+
+        // Add 11 distinct templates to exceed the threshold
+        for (var i = 0; i < 11; i++)
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+
+        Assert.Equal(11, throttle.StateCount);
+
+        // Advance past the suppression window so all entries become stale
+        Advance(_window);
+
+        // Next call triggers eviction — stale entries are removed, only the new one remains
+        throttle.LogWarning(new IOException("disk"), "Fresh {Id}", "inv");
+        Assert.Equal(1, throttle.StateCount);
+        Assert.NotNull(throttle.GetState("Fresh {Id}"));
+    }
+
+    [Fact]
+    public void ActiveEntries_AreNotEvicted()
+    {
+        var throttle = CreateThrottle();
+
+        for (var i = 0; i < 11; i++)
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+
+        // Don't advance clock — entries are still within their window
+        throttle.LogWarning(new IOException("disk"), "Extra {Id}", "inv");
+        Assert.Equal(12, throttle.StateCount);
+    }
+
+    [Fact]
+    public void Eviction_FlushesSuppressedCountSummary()
+    {
+        var throttle = CreateThrottle();
+
+        // Create 11 templates, each with a suppressed call
+        for (var i = 0; i < 11; i++)
+        {
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+            Advance(TimeSpan.FromSeconds(1));
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv"); // suppressed
+        }
+
+        _logger.Entries.Clear();
+
+        // Advance past window and trigger eviction
+        Advance(_window);
+        throttle.LogWarning(new IOException("disk"), "Fresh {Id}", "inv");
+
+        // Each of the 11 stale entries had SuppressedCount=1, so 11 summary logs + 1 fresh warning
+        var summaries = _logger.Entries.FindAll(e => e.Message.Contains("Suppressed 1"));
+        Assert.Equal(11, summaries.Count);
+    }
+
+    [Fact]
+    public void BelowThreshold_NoEvictionOccurs()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "A {Id}", "inv");
+        throttle.LogWarning(new IOException("disk"), "B {Id}", "inv");
+        throttle.LogWarning(new IOException("disk"), "C {Id}", "inv");
+
+        // Advance past window — entries are stale but count (3) is below threshold
+        Advance(_window);
+        throttle.LogWarning(new IOException("disk"), "A {Id}", "inv");
+
+        // All 3 entries still present — no eviction triggered
+        Assert.Equal(3, throttle.StateCount);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
