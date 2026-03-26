@@ -115,6 +115,26 @@ public class LogThrottleTests
         Assert.DoesNotContain("Suppressed", _logger.Entries[1].Message);
     }
 
+    [Fact]
+    public void BackwardClockJump_ResetsWindow()
+    {
+        var throttle = CreateThrottle();
+
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        _now += TimeSpan.FromSeconds(30);
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Clock jumps backward by 2 minutes
+        _now -= TimeSpan.FromMinutes(2);
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
+
+        // Should have: initial warning, summary of 1 suppressed, new warning after clock jump
+        Assert.Equal(3, _logger.Entries.Count);
+        Assert.Contains("Template inv-1", _logger.Entries[0].Message);
+        Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
+        Assert.Contains("Template inv-3", _logger.Entries[2].Message);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
