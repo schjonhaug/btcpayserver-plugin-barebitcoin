@@ -17,15 +17,12 @@ internal class LogThrottle
 
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
-    private readonly TimeSpan _evictionAge;
-    private readonly TimeSpan _evictionInterval;
     private readonly Func<long> _clock;
     private readonly ConcurrentDictionary<(LogLevel, string), ThrottleState> _states = new();
 
     internal class ThrottleState
     {
         public long WindowStart;
-        public long LastAccessed;
         public bool IsFirstCall = true;
         public int SuppressedCount;
         public readonly object Lock = new();
@@ -45,8 +42,6 @@ internal class LogThrottle
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
-        _evictionAge = 10 * suppressionWindow;
-        _evictionInterval = suppressionWindow;
         _clock = clock ?? Stopwatch.GetTimestamp;
     }
 
@@ -68,7 +63,6 @@ internal class LogThrottle
         lock (state.Lock)
         {
             var now = _clock();
-            state.LastAccessed = now;
             var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
 
             if (state.IsFirstCall || elapsed >= _suppressionWindow)
