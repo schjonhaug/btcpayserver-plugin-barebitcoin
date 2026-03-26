@@ -76,10 +76,13 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             if (DateTimeOffset.UtcNow < notBefore)
             {
+                var remaining = notBefore - DateTimeOffset.UtcNow;
                 Logger.LogDebug(
                     "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
                     invoiceId, notBefore);
-                return null;
+                throw new RateLimitedException(
+                    $"Invoice {invoiceId} is rate-limit deferred for {(int)remaining.TotalSeconds}s",
+                    remaining);
             }
 
             // Backoff expired — remove stale entry and proceed with fetch
@@ -112,7 +115,9 @@ public class BareBitcoinLightningClient : ILightningClient
                         Logger.LogWarning(
                             "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {Deferred}s",
                             invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds, (int)clamped.TotalSeconds);
-                        return null;
+                        throw new RateLimitedException(
+                            $"Invoice {invoiceId} rate-limited, deferring for {(int)clamped.TotalSeconds}s",
+                            clamped);
                     }
 
                     Logger.LogWarning(ex,
