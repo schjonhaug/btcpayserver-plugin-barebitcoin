@@ -302,10 +302,6 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service = new FailingSaveService(logger, FilePath);
         await service.TrackInvoice("inv-1");
 
-        // Before any failure, backoff starts at FlushInterval
-        // (failures=0 means GetFlushBackoff uses exponent -1 → 0.5s, but this path
-        // is never hit in practice since increment always precedes the call)
-
         // After 1st failure → exponent 0 → 1s
         await service.FlushAsync();
         Assert.Equal(TimeSpan.FromSeconds(1), service.GetFlushBackoff());
