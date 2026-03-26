@@ -487,10 +487,16 @@ public class BareBitcoinListenerTests : IDisposable
         var client = new FakeLightningClient(async (invoiceId, ct) =>
         {
             var current = Interlocked.Increment(ref currentInFlight);
-            if (current >= 2) overlapTcs.TrySetResult();
-            await overlapTcs.Task.WaitAsync(ct);
-            Interlocked.Decrement(ref currentInFlight);
-            return PaidInvoice(invoiceId);
+            try
+            {
+                if (current >= 2) overlapTcs.TrySetResult();
+                await overlapTcs.Task.WaitAsync(ct);
+                return PaidInvoice(invoiceId);
+            }
+            finally
+            {
+                Interlocked.Decrement(ref currentInFlight);
+            }
         });
 
         using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 20);
