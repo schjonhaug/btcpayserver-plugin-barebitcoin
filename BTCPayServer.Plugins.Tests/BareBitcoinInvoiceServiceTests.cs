@@ -172,6 +172,8 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         Assert.Null(service.LastFlushException);
         Assert.True(File.Exists(FilePath));
+        Assert.DoesNotContain(logger.Entries, e =>
+            e.Level == LogLevel.Error && e.Message.Contains("Final flush failed"));
     }
 
     private class FailingSaveService : BareBitcoinInvoiceService
