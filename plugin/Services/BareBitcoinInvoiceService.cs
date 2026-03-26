@@ -16,7 +16,7 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// Tracked invoices are persisted to disk so they survive server restarts.
 /// Disk writes are debounced to avoid excessive I/O under high invoice throughput.
 /// </summary>
-public class BareBitcoinInvoiceService : IAsyncDisposable
+public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
     private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);

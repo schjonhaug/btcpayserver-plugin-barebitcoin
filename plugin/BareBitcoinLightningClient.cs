@@ -26,7 +26,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly Network _network;
     private readonly BareBitcoinApiService _apiService;
     private readonly BareBitcoinBalanceService _balanceService;
-    private readonly BareBitcoinInvoiceService _invoiceService;
+    private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly int _maxPollConcurrency;
     private readonly LogThrottle _persistenceWarningThrottle;
     public ILogger Logger;
@@ -34,7 +34,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, BareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10)
     {
         _privateKey = privateKey;
         _publicKey = publicKey;

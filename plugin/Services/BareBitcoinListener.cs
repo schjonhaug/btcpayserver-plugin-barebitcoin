@@ -16,7 +16,7 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly ILightningClient _lightningClient;
-    private readonly BareBitcoinInvoiceService _invoiceService;
+    private readonly IBareBitcoinInvoiceService _invoiceService;
     
     // Channel for communicating paid invoices back to BTCPay Server
     // Uses a bounded channel with a capacity of 100 to prevent memory issues
@@ -49,10 +49,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
     /// </summary>
-    public BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
+    public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
         : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, BareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null)
+    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));

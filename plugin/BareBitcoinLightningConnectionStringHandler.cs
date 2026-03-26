@@ -13,9 +13,9 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
-    private readonly BareBitcoinInvoiceService _invoiceService;
+    private readonly IBareBitcoinInvoiceService _invoiceService;
 
-    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, BareBitcoinInvoiceService invoiceService)
+    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IBareBitcoinInvoiceService invoiceService)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
