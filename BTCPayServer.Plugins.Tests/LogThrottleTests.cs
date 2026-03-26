@@ -2,6 +2,8 @@ using System;
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
 using Xunit;
@@ -312,6 +314,61 @@ public class LogThrottleTests
         Assert.Equal(3, throttle.StateCount);
     }
 
+    [Fact]
+    public void ConcurrentEviction_DoesNotThrowOrCorruptState()
+    {
+        var logger = new RecordingLogger();
+        long now = Stopwatch.GetTimestamp();
+        var window = TimeSpan.FromMinutes(5);
+        var throttle = new LogThrottle(logger, window, () => Volatile.Read(ref now));
+
+        // Fill past the eviction threshold with stale entries, each with a suppressed call
+        for (var i = 0; i < 20; i++)
+        {
+            throttle.Log(LogLevel.Warning, null, $"Stale{i} {{Id}}", "inv");
+            throttle.Log(LogLevel.Warning, null, $"Stale{i} {{Id}}", "inv"); // suppressed
+        }
+
+        // Advance past the window so all entries are stale
+        Interlocked.Exchange(ref now, now + (long)(window.TotalSeconds * Stopwatch.Frequency));
+        logger.Entries.Clear();
+
+        // Hammer eviction from many threads simultaneously
+        var barrier = new Barrier(participantCount: 8);
+        var tasks = new Task[8];
+        for (var t = 0; t < tasks.Length; t++)
+        {
+            var threadId = t;
+            tasks[t] = Task.Run(() =>
+            {
+                barrier.SignalAndWait();
+                for (var i = 0; i < 50; i++)
+                    throttle.Log(LogLevel.Warning, null, $"Concurrent{threadId}_{i} {{Id}}", "inv");
+            });
+        }
+
+        Task.WaitAll(tasks);
+
+        // All tasks completed without exceptions; state is consistent
+        Assert.True(throttle.StateCount > 0);
+        Assert.True(throttle.StateCount <= 400,
+            $"Expected at most 400 entries but found {throttle.StateCount}");
+
+        // Each stale template had SuppressedCount=1, so exactly 20 summary logs should be emitted.
+        // No duplicates: extract the template name from each summary and verify uniqueness.
+        var summaries = logger.Entries.FindAll(e => e.Message.Contains("Suppressed 1"));
+        Assert.Equal(20, summaries.Count);
+
+        var templateNames = summaries.ConvertAll(e =>
+        {
+            // Extract template name from: Suppressed 1 repeated message(s) for "Stale3 {Id}" ...
+            var start = e.Message.IndexOf('"') + 1;
+            var end = e.Message.IndexOf('"', start);
+            return e.Message.Substring(start, end - start);
+        });
+        Assert.Equal(20, new HashSet<string>(templateNames).Count);
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
@@ -323,17 +380,21 @@ public class LogThrottleTests
 
     private class RecordingLogger : ILogger
     {
+        private readonly object _lock = new();
         public List<LogEntry> Entries { get; } = new();
         public LogLevel EnabledLevel { get; set; } = LogLevel.Trace;
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
-            Entries.Add(new LogEntry
+            lock (_lock)
             {
-                Level = logLevel,
-                Message = formatter(state, exception),
-                Exception = exception
-            });
+                Entries.Add(new LogEntry
+                {
+                    Level = logLevel,
+                    Message = formatter(state, exception),
+                    Exception = exception
+                });
+            }
         }
 
         public bool IsEnabled(LogLevel logLevel) => logLevel >= EnabledLevel;
