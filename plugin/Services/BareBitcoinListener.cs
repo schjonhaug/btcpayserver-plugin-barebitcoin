@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
@@ -128,6 +129,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
                     {
                         throw; // Shutdown requested, propagate to stop the loop
+                    }
+                    catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
+                    {
+                        _logger.LogDebug("Invoice {InvoiceId} is rate-limited, skipping until next cycle", invoiceId);
                     }
                     catch (Exception ex)
                     {
