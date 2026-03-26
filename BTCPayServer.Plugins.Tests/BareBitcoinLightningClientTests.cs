@@ -352,6 +352,57 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task ListInvoices_SkipsMalformedJson()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", "inv-bad-json" });
+
+        var handler = new PerInvoiceHandler(invoiceId =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    invoiceId == "inv-bad-json" ? "not valid json {{{" : ApiJson("INVOICE_STATUS_UNPAID"),
+                    Encoding.UTF8, "application/json")
+            }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-ok", result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_SkipsMalformedBolt11()
+    {
+        var malformedBolt11Json = """
+            {
+                "invoice": "not-a-valid-bolt11",
+                "status": "INVOICE_STATUS_UNPAID"
+            }
+            """;
+
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", "inv-bad-bolt11" });
+
+        var handler = new PerInvoiceHandler(invoiceId =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(
+                    invoiceId == "inv-bad-bolt11" ? malformedBolt11Json : ApiJson("INVOICE_STATUS_UNPAID"),
+                    Encoding.UTF8, "application/json")
+            }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-ok", result[0].Id);
+    }
+
+    [Fact]
     public async Task ListInvoices_LogsWarning_WhenInvoiceIsSkipped()
     {
         var logger = new CapturingLogger();
