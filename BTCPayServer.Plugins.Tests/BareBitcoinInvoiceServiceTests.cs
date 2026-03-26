@@ -373,7 +373,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         Assert.Equal(logger.ExpectedLogEmitted, logged);
 
         Assert.Contains(logger.Entries, e =>
-            e.Level == LogLevel.Warning && e.Message.Contains("Failed to flush tracked invoices to disk"));
+            e.Level == LogLevel.Error && e.Message.Contains("Failed to flush tracked invoices to disk"));
 
         // Service remains stable — in-memory state is intact
         var tracked = await service.GetTrackedInvoices();
@@ -655,7 +655,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
             {
                 // Force exceptions to escape FlushAsync's internal catches so the
                 // timer callback's defense-in-depth catch is exercised.
-                if (logLevel == LogLevel.Warning && message.Contains("Failed to flush"))
+                if (logLevel == LogLevel.Error && message.Contains("Failed to flush"))
                     throw new InvalidOperationException("Logger exploded on warning");
 
                 if (logLevel == LogLevel.Error && message.Contains("Unhandled exception in FlushAsync"))
