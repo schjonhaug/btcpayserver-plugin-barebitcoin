@@ -562,6 +562,90 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
+    public async Task UntrackInvoice_IOException_NullInvoice_ContinuesProcessing()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice("inv-null");
+        await realService.TrackInvoice("inv-ok");
+
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-null");
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+        {
+            if (invoiceId == "inv-null")
+                return Task.FromResult<LightningInvoice?>(null);
+            return Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId));
+        });
+
+        using var listener = new BareBitcoinListener(client, faultyService, NullLogger.Instance, channelCapacity: 10);
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        var result = await listener.WaitInvoice(cts.Token);
+        Assert.Equal("inv-ok", result.Id);
+
+        // inv-null should still be tracked because untrack failed
+        var remaining = await realService.GetTrackedInvoices();
+        Assert.Contains("inv-null", remaining);
+    }
+
+    [Fact]
+    public async Task UntrackInvoice_IOException_ExpiredInvoice_ContinuesProcessing()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice("inv-expired");
+        await realService.TrackInvoice("inv-ok");
+
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-expired");
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+        {
+            if (invoiceId == "inv-expired")
+                return Task.FromResult<LightningInvoice?>(new LightningInvoice
+                {
+                    Id = invoiceId,
+                    Status = LightningInvoiceStatus.Expired,
+                    Amount = LightMoney.Satoshis(1000),
+                    PaymentHash = invoiceId
+                });
+            return Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId));
+        });
+
+        using var listener = new BareBitcoinListener(client, faultyService, NullLogger.Instance, channelCapacity: 10);
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        var result = await listener.WaitInvoice(cts.Token);
+        Assert.Equal("inv-ok", result.Id);
+
+        // inv-expired should still be tracked because untrack failed
+        var remaining = await realService.GetTrackedInvoices();
+        Assert.Contains("inv-expired", remaining);
+    }
+
+    [Fact]
+    public async Task PaidInvoice_NotDeliveredTwice_WhenUntrackFails()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice("inv-paid");
+
+        // UntrackInvoice always throws, so the invoice stays tracked across poll cycles
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-paid");
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+
+        using var listener = new BareBitcoinListener(client, faultyService, NullLogger.Instance, channelCapacity: 10);
+        using var cts = new CancellationTokenSource(TestTimeout);
+
+        // First delivery should succeed
+        var first = await listener.WaitInvoice(cts.Token);
+        Assert.Equal("inv-paid", first.Id);
+
+        // Second WaitInvoice should time out — the invoice must not be delivered again
+        using var shortCts = new CancellationTokenSource(TimeSpan.FromSeconds(3));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => listener.WaitInvoice(shortCts.Token));
+    }
+
+    [Fact]
     public async Task UntrackInvoice_IOException_DoesNotAbortRemainingInvoices()
     {
         await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
