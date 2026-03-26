@@ -20,9 +20,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 {
     private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
     private readonly Timer _flushTimer;
+    private long _snapshotVersion;
+    private long _writtenVersion;
     private bool _dirty;
     private bool _disposed;
 
@@ -105,6 +108,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
+        string json;
+        long version;
+
         try
         {
             await _invoiceTrackingLock.WaitAsync();
@@ -117,18 +123,66 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         try
         {
             if (!_dirty) return;
-            await SaveToDiskAsync();
+            json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
             _dirty = false;
+            version = ++_snapshotVersion;
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+            _logger.LogError(ex, "Failed to serialize tracked invoices");
             if (!_disposed)
                 ScheduleFlush();
+            return;
         }
         finally
         {
             try { _invoiceTrackingLock.Release(); }
+            catch (ObjectDisposedException) { }
+        }
+
+        try
+        {
+            await _diskWriteLock.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            if (version <= _writtenVersion) return;
+            await SaveToDiskAsync(json);
+            _writtenVersion = version;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to flush tracked invoices to disk");
+
+            try
+            {
+                await _invoiceTrackingLock.WaitAsync();
+            }
+            catch (ObjectDisposedException)
+            {
+                return;
+            }
+
+            try
+            {
+                _dirty = true;
+                if (!_disposed)
+                    ScheduleFlush();
+            }
+            finally
+            {
+                try { _invoiceTrackingLock.Release(); }
+                catch (ObjectDisposedException) { }
+            }
+        }
+        finally
+        {
+            try { _diskWriteLock.Release(); }
             catch (ObjectDisposedException) { }
         }
     }
@@ -141,6 +195,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _flushTimer.DisposeAsync();
         await FlushAsync();
         _invoiceTrackingLock.Dispose();
+        _diskWriteLock.Dispose();
     }
 
     private void ScheduleFlush()
@@ -184,14 +239,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
-    private async Task SaveToDiskAsync()
+    private async Task SaveToDiskAsync(string json)
     {
         var directory = Path.GetDirectoryName(_dataFilePath);
         if (directory != null)
             Directory.CreateDirectory(directory);
 
         var tmpPath = _dataFilePath + ".tmp";
-        var json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
         await File.WriteAllTextAsync(tmpPath, json);
         File.Move(tmpPath, _dataFilePath, overwrite: true);
     }
