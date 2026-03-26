@@ -17,10 +17,13 @@ namespace BTCPayServer.Plugins.Tests;
 
 public class BareBitcoinLightningClientTests
 {
-    // Mainnet BOLT11 test vector from the Lightning spec (BOLT #11):
-    // Send $1 with payment_hash 0001020304050607080900010203040506070809000102030405060708090102
+    // Mainnet BOLT11 test vector from BOLT #11 spec:
+    // "Please make a donation of any amount using payment_hash 0001..."
     private const string TestBolt11 =
-        "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpuaztrnwngzn3kdzw5hydlzf03qdgm2hdq27cqv3agm2awhz5se903vruatfhq77w3ls4evs3ch9zw97j25emudupq63nyw24cg27h2rspfj9srp";
+        "lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq8rkx3yf5tcsyz3d73gafnh3cax9rn449d9p5uxz9ezhhypd0elx87sjle52x86fux2ypatgddc6k63n7erqz25le42c4u4ecky03ylcqca784w";
+
+    // Valid Base64 key required by BareBitcoinApiService.CreateHmac
+    private const string TestPrivateKey = "dGVzdC1wcml2YXRlLWtleS1mb3ItaG1hYw==";
 
     private static string ApiJson(string status) => $$"""
         {
@@ -36,7 +39,7 @@ public class BareBitcoinLightningClientTests
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
-            privateKey: "test-private-key",
+            privateKey: TestPrivateKey,
             publicKey: "test-public-key",
             accountId: "test-account",
             apiEndpoint: new Uri("https://api.example.com"),
