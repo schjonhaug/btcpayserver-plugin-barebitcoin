@@ -179,7 +179,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
                 // Wait before next polling cycle
                 _logger.LogDebug("Polling cycle complete, waiting {Delay}s before next cycle", CurrentPollDelay.TotalSeconds);
-                OnPollCycleCompleted?.Invoke();
+                try { OnPollCycleCompleted?.Invoke(); }
+                catch (Exception ex) { _logger.LogDebug(ex, "OnPollCycleCompleted callback threw"); }
                 await Task.Delay(CurrentPollDelay, _cts.Token);
             }
             catch (OperationCanceledException)
