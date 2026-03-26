@@ -685,6 +685,42 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
+    public async Task RateLimited429_DoesNotCountAsFailure()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+
+        var callCount = 0;
+        var completedCycles = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var client = new FakeLightningClient((invoiceId, _) =>
+        {
+            var count = Interlocked.Increment(ref callCount);
+
+            // First 2 calls return 429, then succeed with unpaid
+            if (count <= 2)
+                throw new HttpRequestException("Too Many Requests", null, System.Net.HttpStatusCode.TooManyRequests);
+
+            if (count == 3)
+                completedCycles.TrySetResult();
+
+            return Task.FromResult<LightningInvoice?>(new LightningInvoice
+            {
+                Id = invoiceId, Status = LightningInvoiceStatus.Unpaid,
+                Amount = LightMoney.Satoshis(1000), PaymentHash = invoiceId
+            });
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 100, maxPollConcurrency: 10);
+
+        await completedCycles.Task.WaitAsync(TimeSpan.FromSeconds(30));
+
+        // 429s should not trigger adaptive backoff — poll delay stays at base
+        Assert.Equal(TimeSpan.FromSeconds(2), listener.CurrentPollDelay);
+    }
+
+    [Fact]
     public async Task DeliveredPaidInvoices_EvictsOldestWhenCapacityExceeded()
     {
         await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
