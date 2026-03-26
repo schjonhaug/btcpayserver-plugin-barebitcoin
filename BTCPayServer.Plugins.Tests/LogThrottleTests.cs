@@ -16,7 +16,8 @@ public class LogThrottleTests
     private long _now = Stopwatch.GetTimestamp();
     private readonly TimeSpan _window = TimeSpan.FromMinutes(5);
 
-    private LogThrottle CreateThrottle() => new(_logger, _window, () => _now);
+    private LogThrottle CreateThrottle(int maxEntries = LogThrottle.DefaultMaxEntries) =>
+        new(_logger, _window, maxEntries, () => _now);
 
     private void Advance(TimeSpan duration) =>
         _now += (long)(duration.TotalSeconds * Stopwatch.Frequency);
@@ -232,7 +233,7 @@ public class LogThrottleTests
     {
         // Simulate early boot: timestamp near zero, less than the suppression window
         long earlyBootNow = (long)(30 * Stopwatch.Frequency); // 30 seconds after boot
-        var throttle = new LogThrottle(_logger, _window, () => earlyBootNow);
+        var throttle = new LogThrottle(_logger, _window, clock: () => earlyBootNow);
 
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
 
@@ -243,7 +244,7 @@ public class LogThrottleTests
     [Fact]
     public void StaleEntries_AreEvictedWhenThresholdExceeded()
     {
-        var throttle = CreateThrottle();
+        var throttle = CreateThrottle(maxEntries: 10);
 
         // Add 11 distinct templates to exceed the threshold
         for (var i = 0; i < 11; i++)
@@ -263,7 +264,7 @@ public class LogThrottleTests
     [Fact]
     public void ActiveEntries_AreNotEvicted()
     {
-        var throttle = CreateThrottle();
+        var throttle = CreateThrottle(maxEntries: 10);
 
         for (var i = 0; i < 11; i++)
             throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
@@ -276,7 +277,7 @@ public class LogThrottleTests
     [Fact]
     public void Eviction_FlushesSuppressedCountSummary()
     {
-        var throttle = CreateThrottle();
+        var throttle = CreateThrottle(maxEntries: 10);
 
         // Create 11 templates, each with a suppressed call
         for (var i = 0; i < 11; i++)
@@ -300,7 +301,7 @@ public class LogThrottleTests
     [Fact]
     public void BelowThreshold_NoEvictionOccurs()
     {
-        var throttle = CreateThrottle();
+        var throttle = CreateThrottle(maxEntries: 10);
 
         throttle.LogWarning(new IOException("disk"), "A {Id}", "inv");
         throttle.LogWarning(new IOException("disk"), "B {Id}", "inv");
@@ -320,7 +321,7 @@ public class LogThrottleTests
         var logger = new RecordingLogger();
         long now = Stopwatch.GetTimestamp();
         var window = TimeSpan.FromMinutes(5);
-        var throttle = new LogThrottle(logger, window, () => Volatile.Read(ref now));
+        var throttle = new LogThrottle(logger, window, maxEntries: 10, clock: () => Volatile.Read(ref now));
 
         // Fill past the eviction threshold with stale entries, each with a suppressed call
         for (var i = 0; i < 20; i++)
@@ -367,6 +368,31 @@ public class LogThrottleTests
             return e.Message.Substring(start, end - start);
         });
         Assert.Equal(20, new HashSet<string>(templateNames).Count);
+    }
+
+    [Fact]
+    public void CustomMaxEntries_TriggersEvictionAtConfiguredThreshold()
+    {
+        var throttle = CreateThrottle(maxEntries: 3);
+
+        for (var i = 0; i < 4; i++)
+            throttle.LogWarning(new IOException("disk"), $"Template{i} {{Id}}", "inv");
+
+        Assert.Equal(4, throttle.StateCount);
+
+        Advance(_window);
+        throttle.LogWarning(new IOException("disk"), "Fresh {Id}", "inv");
+
+        Assert.Equal(1, throttle.StateCount);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonPositiveMaxEntries(int maxEntries)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new LogThrottle(_logger, _window, maxEntries: maxEntries));
     }
 
     [Theory]

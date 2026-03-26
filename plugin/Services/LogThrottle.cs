@@ -14,8 +14,9 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// </summary>
 internal class LogThrottle
 {
-    private const int MaxEntries = 10;
+    internal const int DefaultMaxEntries = 50;
 
+    private readonly int _maxEntries;
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
@@ -35,15 +36,21 @@ internal class LogThrottle
     /// </summary>
     /// <param name="logger">The logger to write throttled messages to.</param>
     /// <param name="suppressionWindow">How long to suppress duplicate messages after the first occurrence.</param>
+    /// <param name="maxEntries">
+    /// Maximum number of tracked message templates before stale entries are evicted.
+    /// Defaults to <see cref="DefaultMaxEntries"/>.
+    /// </param>
     /// <param name="clock">
     /// Optional clock function that must return values compatible with
     /// <see cref="Stopwatch.GetTimestamp"/>. Defaults to <see cref="Stopwatch.GetTimestamp"/>.
     /// </param>
-    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<long>? clock = null)
+    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, int maxEntries = DefaultMaxEntries, Func<long>? clock = null)
     {
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
+        if (maxEntries <= 0) throw new ArgumentOutOfRangeException(nameof(maxEntries));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
+        _maxEntries = maxEntries;
         _clock = clock ?? Stopwatch.GetTimestamp;
     }
 
@@ -90,7 +97,7 @@ internal class LogThrottle
             }
         }
 
-        if (_states.Count > MaxEntries)
+        if (_states.Count > _maxEntries)
             EvictStaleEntries();
     }
 
