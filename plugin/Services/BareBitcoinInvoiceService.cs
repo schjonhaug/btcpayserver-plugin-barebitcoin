@@ -20,6 +20,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 {
     private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
+    private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
     private readonly Timer _flushTimer;
@@ -105,7 +106,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
-        string? json;
+        string json;
 
         try
         {
@@ -122,12 +123,20 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
             _dirty = false;
         }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to serialize tracked invoices");
+            if (!_disposed)
+                ScheduleFlush();
+            return;
+        }
         finally
         {
             try { _invoiceTrackingLock.Release(); }
             catch (ObjectDisposedException) { }
         }
 
+        await _diskWriteLock.WaitAsync();
         try
         {
             await SaveToDiskAsync(json);
@@ -157,6 +166,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 catch (ObjectDisposedException) { }
             }
         }
+        finally
+        {
+            _diskWriteLock.Release();
+        }
     }
 
     public async ValueTask DisposeAsync()
@@ -167,6 +180,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _flushTimer.DisposeAsync();
         await FlushAsync();
         _invoiceTrackingLock.Dispose();
+        _diskWriteLock.Dispose();
     }
 
     private void ScheduleFlush()
