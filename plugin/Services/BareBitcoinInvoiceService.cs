@@ -168,7 +168,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
         finally
         {
-            _diskWriteLock.Release();
+            try { _diskWriteLock.Release(); }
+            catch (ObjectDisposedException) { }
         }
     }
 
