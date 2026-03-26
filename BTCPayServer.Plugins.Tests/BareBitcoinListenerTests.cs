@@ -522,23 +522,21 @@ public class BareBitcoinListenerTests : IDisposable
         await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice("inv-1");
 
-        var errorReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var delayReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
         var client = new FakeLightningClient((_, _) =>
         {
-            errorReached.TrySetResult();
             throw new Exception("Simulated failure");
         });
 
-        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10);
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance,
+            channelCapacity: 10,
+            onPollCycleCompleted: () => delayReached.TrySetResult());
 
-        // Wait until at least one poll has failed and the outer catch is executing
-        await errorReached.Task.WaitAsync(TestTimeout);
+        // Wait deterministically until the poll cycle completes and is about to enter the delay
+        await delayReached.Task.WaitAsync(TestTimeout);
 
-        // Let the code reach Task.Delay inside the catch block
-        await Task.Delay(100);
-
-        // Dispose triggers cancellation during the error-backoff delay
+        // Dispose triggers cancellation during the inter-cycle delay
         listener.Dispose();
 
         Assert.True(listener.IsDisposed);

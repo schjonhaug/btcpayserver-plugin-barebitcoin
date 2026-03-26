@@ -45,6 +45,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     internal Action<LightningInvoice>? OnBeforeWrite { get; }
     internal Action<LightningInvoice>? OnAfterWrite { get; }
+    internal Action? OnPollCycleCompleted { get; }
 
     /// <summary>
     /// Initializes a new instance of the BareBitcoinListener.
@@ -53,7 +54,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
         : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null)
+    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
@@ -65,6 +66,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _cts = new CancellationTokenSource();
         OnBeforeWrite = onBeforeWrite;
         OnAfterWrite = onAfterWrite;
+        OnPollCycleCompleted = onPollCycleCompleted;
 
         // Initialize bounded channel with single reader/writer for thread safety
         _invoices = Channel.CreateBounded<LightningInvoice>(new BoundedChannelOptions(channelCapacity)
@@ -177,6 +179,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
                 // Wait before next polling cycle
                 _logger.LogDebug("Polling cycle complete, waiting {Delay}s before next cycle", CurrentPollDelay.TotalSeconds);
+                try { OnPollCycleCompleted?.Invoke(); }
+                catch (Exception ex) { _logger.LogDebug(ex, "OnPollCycleCompleted callback threw"); }
                 await Task.Delay(CurrentPollDelay, _cts.Token);
             }
             catch (OperationCanceledException)
