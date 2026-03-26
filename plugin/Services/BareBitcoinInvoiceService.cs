@@ -24,6 +24,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private readonly ILogger _logger;
     private readonly string _dataFilePath;
     private readonly Timer _flushTimer;
+    private long _snapshotVersion;
+    private long _writtenVersion;
     private bool _dirty;
     private bool _disposed;
 
@@ -107,6 +109,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     public async Task FlushAsync()
     {
         string json;
+        long version;
 
         try
         {
@@ -122,6 +125,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             if (!_dirty) return;
             json = JsonConvert.SerializeObject(_trackedInvoiceRegistry);
             _dirty = false;
+            version = ++_snapshotVersion;
         }
         catch (Exception ex)
         {
@@ -136,10 +140,20 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             catch (ObjectDisposedException) { }
         }
 
-        await _diskWriteLock.WaitAsync();
         try
         {
+            await _diskWriteLock.WaitAsync();
+        }
+        catch (ObjectDisposedException)
+        {
+            return;
+        }
+
+        try
+        {
+            if (version <= _writtenVersion) return;
             await SaveToDiskAsync(json);
+            _writtenVersion = version;
         }
         catch (Exception ex)
         {
