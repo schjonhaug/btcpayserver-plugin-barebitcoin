@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.IO;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
@@ -10,10 +11,13 @@ namespace BTCPayServer.Plugins.Tests;
 public class LogThrottleTests
 {
     private readonly RecordingLogger _logger = new();
-    private DateTimeOffset _now = new(2025, 1, 1, 0, 0, 0, TimeSpan.Zero);
+    private long _now = Stopwatch.GetTimestamp();
     private readonly TimeSpan _window = TimeSpan.FromMinutes(5);
 
     private LogThrottle CreateThrottle() => new(_logger, _window, () => _now);
+
+    private void Advance(TimeSpan duration) =>
+        _now += (long)(duration.TotalSeconds * Stopwatch.Frequency);
 
     [Fact]
     public void FirstCall_LogsImmediately()
@@ -45,9 +49,9 @@ public class LogThrottleTests
         var throttle = CreateThrottle();
 
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
-        _now += TimeSpan.FromSeconds(30);
+        Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
-        _now += TimeSpan.FromSeconds(30);
+        Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
 
         // Only the first call should have logged
@@ -64,13 +68,13 @@ public class LogThrottleTests
         var throttle = CreateThrottle();
 
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
-        _now += TimeSpan.FromSeconds(30);
+        Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
-        _now += TimeSpan.FromSeconds(30);
+        Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
 
         // Advance past the window
-        _now += TimeSpan.FromMinutes(5);
+        Advance(TimeSpan.FromMinutes(5));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-4");
 
         // Should have: initial warning, summary, new warning
@@ -91,7 +95,7 @@ public class LogThrottleTests
         Assert.Equal(2, _logger.Entries.Count);
 
         // Suppress further calls for both
-        _now += TimeSpan.FromSeconds(30);
+        Advance(TimeSpan.FromSeconds(30));
         throttle.LogWarning(new IOException("disk"), "Template A {Id}", "inv-3");
         throttle.LogWarning(new IOException("disk"), "Template B {Id}", "inv-4");
 
@@ -107,7 +111,7 @@ public class LogThrottleTests
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
 
         // Advance past window with no intermediate calls
-        _now += TimeSpan.FromMinutes(6);
+        Advance(TimeSpan.FromMinutes(6));
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
 
         // Should have: initial warning, new warning (no summary since nothing was suppressed)
@@ -116,40 +120,16 @@ public class LogThrottleTests
     }
 
     [Fact]
-    public void BackwardClockJump_ResetsWindow()
+    public void FirstCall_LogsImmediately_EvenWithLowTimestamp()
     {
-        var throttle = CreateThrottle();
-
-        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
-        _now += TimeSpan.FromSeconds(30);
-        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
-
-        // Clock jumps backward by 2 minutes
-        _now -= TimeSpan.FromMinutes(2);
-        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
-
-        // Should have: initial warning, summary of 1 suppressed, new warning after clock jump
-        Assert.Equal(3, _logger.Entries.Count);
-        Assert.Contains("Template inv-1", _logger.Entries[0].Message);
-        Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
-        Assert.Contains("Template inv-3", _logger.Entries[2].Message);
-    }
-
-    [Fact]
-    public void BackwardClockJump_WithNoSuppressed_LogsWithoutSummary()
-    {
-        var throttle = CreateThrottle();
+        // Simulate early boot: timestamp near zero, less than the suppression window
+        long earlyBootNow = (long)(30 * Stopwatch.Frequency); // 30 seconds after boot
+        var throttle = new LogThrottle(_logger, _window, () => earlyBootNow);
 
         throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
 
-        // Clock jumps backward with no intermediate (suppressed) calls
-        _now -= TimeSpan.FromMinutes(2);
-        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-2");
-
-        // Should have: initial warning, new warning (no summary since nothing was suppressed)
-        Assert.Equal(2, _logger.Entries.Count);
+        Assert.Single(_logger.Entries);
         Assert.Contains("Template inv-1", _logger.Entries[0].Message);
-        Assert.Contains("Template inv-2", _logger.Entries[1].Message);
     }
 
     [Theory]
