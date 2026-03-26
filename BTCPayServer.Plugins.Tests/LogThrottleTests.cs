@@ -157,7 +157,29 @@ public class LogThrottleTests
     }
 
     [Fact]
-    public void Log_SummaryUsesCallerLogLevel()
+    public void Log_SummaryUsesHighestSeveritySeenDuringWindow()
+    {
+        var throttle = CreateThrottle();
+
+        // First call at Warning
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-1");
+        // Suppress an Error within the window
+        Advance(TimeSpan.FromSeconds(30));
+        throttle.LogError(new IOException("disk"), "Template {Id}", "inv-2");
+
+        // Advance past the window and trigger reset at Warning level
+        Advance(TimeSpan.FromMinutes(5));
+        throttle.LogWarning(new IOException("disk"), "Template {Id}", "inv-3");
+
+        // Summary (entry[1]) should be at Error level (the highest severity suppressed),
+        // not Warning (the caller's level)
+        Assert.Equal(3, _logger.Entries.Count);
+        Assert.Equal(LogLevel.Error, _logger.Entries[1].Level);
+        Assert.Contains("Suppressed 1", _logger.Entries[1].Message);
+    }
+
+    [Fact]
+    public void Log_SummaryUsesCallerLevelWhenNoHigherSeveritySuppressed()
     {
         var throttle = CreateThrottle();
 
@@ -169,7 +191,7 @@ public class LogThrottleTests
         Advance(TimeSpan.FromMinutes(5));
         throttle.LogError(new IOException("disk"), "Template {Id}", "inv-3");
 
-        // Summary (entry[1]) should be at Error level (the caller's level)
+        // Summary should be at Error (caller's level is higher than suppressed Warning)
         Assert.Equal(3, _logger.Entries.Count);
         Assert.Equal(LogLevel.Error, _logger.Entries[1].Level);
         Assert.Contains("Suppressed 1", _logger.Entries[1].Message);

@@ -22,6 +22,7 @@ internal class LogThrottle
         public long WindowStart;
         public bool IsFirstCall = true;
         public int SuppressedCount;
+        public LogLevel MaxLogLevel;
         public readonly object Lock = new();
     }
 
@@ -57,7 +58,8 @@ internal class LogThrottle
                 // Window expired (or first call) — emit summary if anything was suppressed
                 if (state.SuppressedCount > 0)
                 {
-                    _logger.Log(logLevel,
+                    var summaryLevel = (LogLevel)Math.Max((int)state.MaxLogLevel, (int)logLevel);
+                    _logger.Log(summaryLevel,
                         "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
                         state.SuppressedCount, messageTemplate, _suppressionWindow);
                 }
@@ -67,11 +69,14 @@ internal class LogThrottle
                 state.WindowStart = now;
                 state.IsFirstCall = false;
                 state.SuppressedCount = 0;
+                state.MaxLogLevel = logLevel;
             }
             else
             {
                 // Within window — suppress
                 state.SuppressedCount++;
+                if (logLevel > state.MaxLogLevel)
+                    state.MaxLogLevel = logLevel;
             }
         }
     }
