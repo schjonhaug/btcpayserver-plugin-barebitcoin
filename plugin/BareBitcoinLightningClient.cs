@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
@@ -66,7 +67,7 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
         }
-        catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.NotFound)
+        catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
             Logger.LogWarning("Invoice {InvoiceId} not found (404)", invoiceId);
             return null;
@@ -195,12 +196,26 @@ public class BareBitcoinLightningClient : ILightningClient
             var trackedInvoices = await _invoiceService.GetTrackedInvoices(cancellation);
             foreach (var invoiceId in trackedInvoices)
             {
-                var invoice = await GetInvoice(invoiceId, cancellation);
+                LightningInvoice? invoice;
+                try
+                {
+                    invoice = await GetInvoice(invoiceId, cancellation);
+                }
+                catch (Exception ex) when (ex is HttpRequestException { StatusCode: HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden })
+                {
+                    throw;
+                }
+                catch (Exception ex) when (ex is HttpRequestException or JsonException or FormatException)
+                {
+                    Logger.LogWarning(ex, "Skipping invoice {InvoiceId} due to error", invoiceId);
+                    continue;
+                }
+
                 if (invoice != null)
                 {
                     if (!isPendingOnly || invoice.Status == LightningInvoiceStatus.Unpaid)
                     {
-                        Logger.LogInformation("Adding invoice {InvoiceId} with status {Status} to results", 
+                        Logger.LogInformation("Adding invoice {InvoiceId} with status {Status} to results",
                             invoice.Id, invoice.Status);
                         invoices.Add(invoice);
                     }
