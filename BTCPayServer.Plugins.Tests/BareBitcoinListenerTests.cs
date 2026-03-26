@@ -520,6 +520,35 @@ public class BareBitcoinListenerTests : IDisposable
             $"Peak concurrent polls was {peakInFlight}, expected >= 2 to prove parallel execution");
     }
 
+    [Fact]
+    public async Task CancellationDuringErrorBackoff_ShutsDownGracefully()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice("inv-1");
+
+        var errorReached = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        var client = new FakeLightningClient((_, _) =>
+        {
+            errorReached.TrySetResult();
+            throw new Exception("Simulated failure");
+        });
+
+        using var listener = new BareBitcoinListener(client, invoiceService, NullLogger.Instance, channelCapacity: 10);
+
+        // Wait until at least one poll has failed and the outer catch is executing
+        await errorReached.Task.WaitAsync(TestTimeout);
+
+        // Let the code reach Task.Delay inside the catch block
+        await Task.Delay(100);
+
+        // Dispose triggers cancellation during the error-backoff delay
+        listener.Dispose();
+
+        Assert.True(listener.IsDisposed);
+        Assert.Equal(TaskStatus.RanToCompletion, listener.PollingTask.Status);
+    }
+
     private static async Task WaitUntilInvoiceIsUntracked(BareBitcoinInvoiceService invoiceService, string invoiceId)
     {
         var deadline = DateTimeOffset.UtcNow + TestTimeout;

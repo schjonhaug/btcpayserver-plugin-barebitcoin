@@ -39,6 +39,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private const double ErrorThreshold = 0.5; // 50% failure rate triggers backoff
 
     internal TimeSpan CurrentPollDelay { get; private set; } = TimeSpan.FromSeconds(2);
+    internal Task PollingTask => _pollingTask;
 
     public bool IsDisposed => _isDisposed;
 
@@ -191,7 +192,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error while polling for invoice updates");
-                await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
+                try
+                {
+                    await Task.Delay(TimeSpan.FromSeconds(5), _cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    break;
+                }
             }
         }
     }
