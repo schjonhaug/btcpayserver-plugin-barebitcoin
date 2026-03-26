@@ -28,6 +28,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly BareBitcoinInvoiceService _invoiceService;
     private readonly int _maxPollConcurrency;
+    private readonly LogThrottle _persistenceWarningThrottle;
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
@@ -46,6 +47,7 @@ public class BareBitcoinLightningClient : ILightningClient
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
 
+        _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
         _balanceService = new BareBitcoinBalanceService(_apiService, logger);
     }
@@ -112,7 +114,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 }
                 catch (IOException ex)
                 {
-                    Logger.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
+                    _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
                 }
             }
             else if (status == LightningInvoiceStatus.Expired)
@@ -123,7 +125,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 }
                 catch (IOException ex)
                 {
-                    Logger.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+                    _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
                 }
             }
 
@@ -324,7 +326,7 @@ public class BareBitcoinLightningClient : ILightningClient
             }
             catch (IOException ex)
             {
-                Logger.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
+                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
             }
 
             return new LightningInvoice
