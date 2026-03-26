@@ -685,7 +685,7 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
-    public async Task DeliveredPaidInvoices_ClearsWhenCapacityExceeded()
+    public async Task DeliveredPaidInvoices_EvictsOldestWhenCapacityExceeded()
     {
         await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await realService.TrackInvoice("inv-1");
@@ -698,7 +698,7 @@ public class BareBitcoinListenerTests : IDisposable
         var client = new FakeLightningClient((invoiceId, _) =>
             Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
 
-        // maxDeliveredCapacity: 2 means the 3rd Add triggers the clear
+        // maxDeliveredCapacity: 2 means the 3rd Add triggers FIFO eviction of the oldest entry
         using var listener = new BareBitcoinListener(client, alwaysFaultyService, NullLogger.Instance,
             channelCapacity: 10, maxDeliveredCapacity: 2);
         using var cts = new CancellationTokenSource(TestTimeout);
@@ -713,8 +713,8 @@ public class BareBitcoinListenerTests : IDisposable
 
         Assert.Equal(3, firstBatch.Count);
 
-        // After the clear, previously-delivered invoices can be re-delivered
-        // since they're still tracked (untrack always fails). Read at least one re-delivery.
+        // After FIFO eviction, the oldest entry was evicted and can be re-delivered
+        // since it's still tracked (untrack always fails).
         var redelivered = await listener.WaitInvoice(cts.Token);
         Assert.Contains(redelivered.Id, firstBatch);
     }

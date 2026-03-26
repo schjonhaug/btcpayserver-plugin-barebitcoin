@@ -32,6 +32,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     // Guards against duplicate paid invoice delivery when UntrackInvoice fails
     private readonly HashSet<string> _deliveredPaidInvoices = new();
+    private readonly Queue<string> _deliveredPaidInvoicesQueue = new();
     private readonly int _maxDeliveredCapacity;
 
     private bool _isDisposed;
@@ -156,14 +157,22 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             OnAfterWrite?.Invoke(invoice);
                             if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
                             {
-                                _persistenceWarningThrottle.LogWarning(null,
-                                    "Delivered paid invoices set reached {Capacity}, clearing to prevent unbounded growth. " +
-                                    "This may cause duplicate delivery of recently paid invoices, which is safe",
-                                    _maxDeliveredCapacity);
-                                _deliveredPaidInvoices.Clear();
+                                var evictCount = Math.Max(1, _maxDeliveredCapacity / 10);
+                                var evicted = 0;
+                                while (evicted < evictCount && _deliveredPaidInvoicesQueue.Count > 0)
+                                {
+                                    var oldest = _deliveredPaidInvoicesQueue.Dequeue();
+                                    if (_deliveredPaidInvoices.Remove(oldest))
+                                        evicted++;
+                                }
+
+                                _logger.LogDebug(
+                                    "Evicted {EvictedCount} oldest entries from delivered paid invoices set (capacity: {Capacity})",
+                                    evicted, _maxDeliveredCapacity);
                             }
 
                             _deliveredPaidInvoices.Add(invoiceId);
+                            _deliveredPaidInvoicesQueue.Enqueue(invoiceId);
                         }
                         if (await TryUntrackInvoice(invoiceId))
                             _deliveredPaidInvoices.Remove(invoiceId);
