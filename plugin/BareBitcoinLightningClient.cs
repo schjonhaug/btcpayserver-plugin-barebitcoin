@@ -194,6 +194,7 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         const int baseDelayMs = 200;
         var maxDelay = TimeSpan.FromSeconds(30);
+        var maxRateLimitDelay = TimeSpan.FromSeconds(60);
 
         for (var attempt = 0; ; attempt++)
         {
@@ -209,17 +210,31 @@ public class BareBitcoinLightningClient : ILightningClient
             catch (HttpRequestException ex) when (
                 attempt < _maxRetries && IsTransientHttpError(ex))
             {
-                var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
-                var delay = ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero
-                    ? ra
-                    : backoff;
-                if (delay > maxDelay) delay = maxDelay;
+                if (ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero)
+                {
+                    if (ra > maxRateLimitDelay)
+                    {
+                        Logger.LogWarning(
+                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, skipping until next poll cycle",
+                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds);
+                        return null;
+                    }
 
-                Logger.LogWarning(ex,
-                    "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
-                    invoiceId, attempt + 1, _maxRetries, (int)delay.TotalMilliseconds);
+                    Logger.LogWarning(ex,
+                        "Invoice {InvoiceId} rate-limited (attempt {Attempt}/{MaxRetries}), honoring Retry-After of {Delay}ms",
+                        invoiceId, attempt + 1, _maxRetries, (int)ra.TotalMilliseconds);
+                    await Task.Delay(ra, cancellation);
+                }
+                else
+                {
+                    var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
+                    if (backoff > maxDelay) backoff = maxDelay;
 
-                await Task.Delay(delay, cancellation);
+                    Logger.LogWarning(ex,
+                        "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
+                        invoiceId, attempt + 1, _maxRetries, (int)backoff.TotalMilliseconds);
+                    await Task.Delay(backoff, cancellation);
+                }
             }
         }
     }
