@@ -248,7 +248,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         catch (ObjectDisposedException) { }
     }
 
-    private TimeSpan GetFlushBackoff()
+    internal TimeSpan GetFlushBackoff()
     {
         var exponent = Math.Min(_consecutiveFlushFailures - 1, 10);
         var seconds = FlushInterval.TotalSeconds * Math.Pow(2, exponent);

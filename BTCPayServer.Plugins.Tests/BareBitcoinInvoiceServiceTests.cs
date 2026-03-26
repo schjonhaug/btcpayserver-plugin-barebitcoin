@@ -296,27 +296,39 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public void GetFlushBackoff_ProducesExponentialDelaysCappedAtMax()
+    public async Task GetFlushBackoff_ProducesExponentialDelaysCappedAtMax()
     {
-        // Backoff formula: min(1 * 2^(failures-1), 30) seconds
-        // Counter is incremented before computing delay, so failures is 1-based.
-        var flush = BareBitcoinInvoiceService.FlushInterval.TotalSeconds;
-        var max = BareBitcoinInvoiceService.MaxFlushBackoff.TotalSeconds;
+        var logger = new RecordingLogger();
+        await using var service = new FailingSaveService(logger, FilePath);
+        await service.TrackInvoice("inv-1");
 
-        // failures=1 (first failure) → 2^0 = 1s
-        Assert.Equal(1, Math.Min(flush * Math.Pow(2, 1 - 1), max));
-        // failures=2 → 2^1 = 2s
-        Assert.Equal(2, Math.Min(flush * Math.Pow(2, 2 - 1), max));
-        // failures=3 → 2^2 = 4s
-        Assert.Equal(4, Math.Min(flush * Math.Pow(2, 3 - 1), max));
-        // failures=4 → 2^3 = 8s
-        Assert.Equal(8, Math.Min(flush * Math.Pow(2, 4 - 1), max));
-        // failures=5 → 2^4 = 16s
-        Assert.Equal(16, Math.Min(flush * Math.Pow(2, 5 - 1), max));
-        // failures=6 → 2^5 = 32 → capped at 30s
-        Assert.Equal(30, Math.Min(flush * Math.Pow(2, 6 - 1), max));
-        // failures=100 → exponent capped at 10 → 2^10 = 1024 → capped at 30s
-        Assert.Equal(30, Math.Min(flush * Math.Pow(2, Math.Min(100 - 1, 10)), max));
+        // Before any failure, backoff starts at FlushInterval
+        // (failures=0 means GetFlushBackoff uses exponent -1 → 0.5s, but this path
+        // is never hit in practice since increment always precedes the call)
+
+        // After 1st failure → exponent 0 → 1s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(1), service.GetFlushBackoff());
+
+        // After 2nd failure → exponent 1 → 2s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(2), service.GetFlushBackoff());
+
+        // After 3rd failure → exponent 2 → 4s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(4), service.GetFlushBackoff());
+
+        // After 4th failure → exponent 3 → 8s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(8), service.GetFlushBackoff());
+
+        // After 5th failure → exponent 4 → 16s
+        await service.FlushAsync();
+        Assert.Equal(TimeSpan.FromSeconds(16), service.GetFlushBackoff());
+
+        // After 6th failure → exponent 5 → 32 → capped at 30s
+        await service.FlushAsync();
+        Assert.Equal(BareBitcoinInvoiceService.MaxFlushBackoff, service.GetFlushBackoff());
     }
 
     [Fact]
