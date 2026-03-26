@@ -1,7 +1,6 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Text;
@@ -138,6 +137,7 @@ public class BareBitcoinLightningClientTests
 
         var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
         Assert.Contains("inv-log-1", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
     }
 
     [Fact]
@@ -154,6 +154,7 @@ public class BareBitcoinLightningClientTests
 
         var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
         Assert.Contains("inv-log-2", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
     }
 
     [Fact]
@@ -171,6 +172,7 @@ public class BareBitcoinLightningClientTests
 
         var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
         Assert.Contains("dep-1", warning.Message);
+        Assert.IsType<IOException>(warning.Exception);
     }
 
     private sealed class ThrowingInvoiceService(
