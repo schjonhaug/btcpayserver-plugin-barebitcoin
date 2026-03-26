@@ -132,9 +132,14 @@ public class BareBitcoinLightningClient : ILightningClient
 
             return result;
         }
-        catch (Exception ex)
+        catch (HttpRequestException ex)
         {
-            Logger.LogError(ex, "Error getting invoice from BareBitcoin");
+            Logger.LogError(ex, "Network error getting invoice {InvoiceId} from BareBitcoin", invoiceId);
+            return null;
+        }
+        catch (JsonException ex)
+        {
+            Logger.LogError(ex, "JSON parsing error getting invoice {InvoiceId} from BareBitcoin", invoiceId);
             return null;
         }
     }
