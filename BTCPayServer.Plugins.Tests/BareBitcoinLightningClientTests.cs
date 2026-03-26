@@ -384,6 +384,39 @@ public class BareBitcoinLightningClientTests
         Assert.Equal(4, attemptCount);
     }
 
+    [Fact]
+    public async Task GetInvoice_Retries429WithinCap_ThenSucceeds()
+    {
+        var attemptCount = 0;
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new CountingPerInvoiceHandler((_, attempt) =>
+        {
+            Interlocked.Increment(ref attemptCount);
+            if (attempt == 1)
+            {
+                var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+                {
+                    Content = new StringContent("rate limited")
+                };
+                response.Headers.RetryAfter = new System.Net.Http.Headers.RetryConditionHeaderValue(
+                    TimeSpan.FromMilliseconds(50));
+                return Task.FromResult(response);
+            }
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            });
+        });
+
+        var client = CreateClient(handler, invoiceService, maxRetries: 3);
+
+        var result = await client.GetInvoice("inv-retry-429");
+
+        Assert.NotNull(result);
+        Assert.Equal("inv-retry-429", result.Id);
+        Assert.Equal(2, attemptCount);
+    }
+
     private sealed class FakeMessageHandler(string responseBody) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
