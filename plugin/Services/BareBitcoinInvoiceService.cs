@@ -141,7 +141,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             {
                 Interlocked.Increment(ref _consecutiveFlushFailures);
                 Volatile.Write(ref _lastFlushException, ex);
-                _logThrottle.LogWarning(ex, "Failed to serialize tracked invoices");
+                _logThrottle.LogError(ex, "Failed to serialize tracked invoices");
                 if (!_disposed)
                     ScheduleFlush(GetFlushBackoff());
                 return;
@@ -164,7 +164,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             {
                 Interlocked.Increment(ref _consecutiveFlushFailures);
                 Volatile.Write(ref _lastFlushException, ex);
-                _logThrottle.LogWarning(ex, "Failed to flush tracked invoices to disk");
+                _logThrottle.LogError(ex, "Failed to flush tracked invoices to disk");
                 await MarkDirtyAndRescheduleAsync();
             }
             finally
