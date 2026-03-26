@@ -15,6 +15,7 @@ internal class LogThrottle
     private readonly ILogger _logger;
     private readonly TimeSpan _suppressionWindow;
     private readonly Func<long> _clock;
+    private readonly int _maxEntries;
     private readonly ConcurrentDictionary<string, ThrottleState> _states = new();
 
     internal class ThrottleState
@@ -25,22 +26,42 @@ internal class LogThrottle
         public readonly object Lock = new();
     }
 
-    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<long>? clock = null)
+    public LogThrottle(ILogger logger, TimeSpan suppressionWindow, Func<long>? clock = null, int maxEntries = 100)
     {
         if (suppressionWindow <= TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(suppressionWindow));
+        if (maxEntries <= 0) throw new ArgumentOutOfRangeException(nameof(maxEntries));
         _logger = logger;
         _suppressionWindow = suppressionWindow;
         _clock = clock ?? Stopwatch.GetTimestamp;
+        _maxEntries = maxEntries;
     }
 
     /// <summary>
     /// Logs a message at the specified level, throttling repeated calls with the same
-    /// <paramref name="messageTemplate"/>. The template must be a static string literal;
-    /// dynamic templates will cause unbounded memory growth.
+    /// <paramref name="messageTemplate"/>. Prefer static string literals for templates.
+    /// A hard cap evicts the oldest entry when the number of tracked templates exceeds
+    /// <c>maxEntries</c>.
     /// </summary>
     public void Log(LogLevel logLevel, Exception? ex, string messageTemplate, params object[] args)
     {
         if (!_logger.IsEnabled(logLevel)) return;
+
+        // Evict oldest entry if at capacity and this is a new template
+        if (_states.Count >= _maxEntries && !_states.ContainsKey(messageTemplate))
+        {
+            string? oldestKey = null;
+            long oldestWindow = long.MaxValue;
+            foreach (var kvp in _states)
+            {
+                if (kvp.Value.WindowStart < oldestWindow)
+                {
+                    oldestWindow = kvp.Value.WindowStart;
+                    oldestKey = kvp.Key;
+                }
+            }
+            if (oldestKey != null)
+                _states.TryRemove(oldestKey, out _);
+        }
 
         var state = _states.GetOrAdd(messageTemplate, _ => new ThrottleState
         {

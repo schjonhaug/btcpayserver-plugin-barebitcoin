@@ -200,6 +200,54 @@ public class LogThrottleTests
         Assert.Contains("Template inv-1", _logger.Entries[0].Message);
     }
 
+    [Fact]
+    public void MaxEntries_EvictsOldestWhenCapacityReached()
+    {
+        var throttle = new LogThrottle(_logger, _window, () => _now, maxEntries: 2);
+
+        throttle.LogWarning(null, "Template A");
+        Advance(TimeSpan.FromSeconds(1));
+        throttle.LogWarning(null, "Template B");
+        Advance(TimeSpan.FromSeconds(1));
+
+        // Both exist
+        Assert.NotNull(throttle.GetState("Template A"));
+        Assert.NotNull(throttle.GetState("Template B"));
+
+        // Adding a third should evict Template A (oldest WindowStart)
+        throttle.LogWarning(null, "Template C");
+
+        Assert.Null(throttle.GetState("Template A"));
+        Assert.NotNull(throttle.GetState("Template B"));
+        Assert.NotNull(throttle.GetState("Template C"));
+    }
+
+    [Fact]
+    public void MaxEntries_ExistingTemplateDoesNotTriggerEviction()
+    {
+        var throttle = new LogThrottle(_logger, _window, () => _now, maxEntries: 2);
+
+        throttle.LogWarning(null, "Template A");
+        Advance(TimeSpan.FromSeconds(1));
+        throttle.LogWarning(null, "Template B");
+        Advance(TimeSpan.FromSeconds(1));
+
+        // Re-logging an existing template should not evict anything
+        throttle.LogWarning(null, "Template A");
+
+        Assert.NotNull(throttle.GetState("Template A"));
+        Assert.NotNull(throttle.GetState("Template B"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public void Constructor_RejectsNonPositiveMaxEntries(int maxEntries)
+    {
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new LogThrottle(_logger, TimeSpan.FromMinutes(5), maxEntries: maxEntries));
+    }
+
     [Theory]
     [InlineData(0)]
     [InlineData(-1)]
