@@ -9,13 +9,14 @@ foreach (var plugin in plugins)
     {
         var assemblyConfigurationAttribute = typeof(Program).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>();
         var buildConfigurationName = assemblyConfigurationAttribute?.Configuration;
-        var f = $"{Path.GetFullPath(plugin)}/bin/{buildConfigurationName}/net10.0/{Path.GetFileName(plugin)}.dll";
+        var pluginBinDir = Path.Combine(Path.GetFullPath(plugin), "bin");
+        var pluginDllName = $"{Path.GetFileName(plugin)}.dll";
+        var f = Path.Combine(pluginBinDir, buildConfigurationName ?? "Debug", "net10.0", pluginDllName);
         if (File.Exists(f))
             p += $"{f};";
         else
         {
-            
-            f = $"{Path.GetFullPath(plugin)}/bin/Debug/net10.0/{Path.GetFileName(plugin)}.dll";
+            f = Path.Combine(pluginBinDir, "Debug", "net10.0", pluginDllName);
             if (File.Exists(f))
                 p += $"{f};";
         }
@@ -42,12 +43,16 @@ var content = JsonSerializer.Serialize(new
 Console.WriteLine(content);
 var btcpayRootCandidates = new[]
 {
-    "../../../../btcpayserver/BTCPayServer/appsettings.dev.json",
-    "../../../../submodules/btcpayserver/BTCPayServer/appsettings.dev.json"
+    Path.GetFullPath("../../../../btcpayserver/BTCPayServer"),
+    Path.GetFullPath("../../../../submodules/btcpayserver/BTCPayServer")
 };
 
 var appSettingsPath = btcpayRootCandidates
-    .Select(Path.GetFullPath)
-    .FirstOrDefault(File.Exists) ?? Path.GetFullPath(btcpayRootCandidates[0]);
+    .FirstOrDefault(path => File.Exists(Path.Combine(path, "BTCPayServer.csproj")));
 
-await File.WriteAllTextAsync(appSettingsPath, content);
+if (appSettingsPath is null)
+{
+    throw new DirectoryNotFoundException("Could not locate a BTCPayServer checkout in either the adjacent or submodule layout.");
+}
+
+await File.WriteAllTextAsync(Path.Combine(appSettingsPath, "appsettings.dev.json"), content);
