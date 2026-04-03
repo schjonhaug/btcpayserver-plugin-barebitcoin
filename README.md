@@ -53,7 +53,9 @@ Use the provided script to generate your BTCPay Server connection string:
 
 ### Prerequisites
 
-Install the [.NET 8.0 SDK](https://dotnet.microsoft.com/download/dotnet/8.0). The plugin and tests target `net8.0` and do not roll forward to newer major versions.
+Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The plugin and tests target `net10.0`.
+
+This branch targets BTCPay Server `2.3.7` and newer. For BTCPay Server `2.3.6` and older, keep using an older plugin release that still targets `.NET 8`.
 
 Use one of these BTCPay Server source layouts:
 
@@ -99,7 +101,7 @@ Configure BTCPay Server to load the plugin:
 
 ```shell
 echo '{
-  "DEBUG_PLUGINS": "<absolute-path-to>/plugin/bin/Debug/net8.0/BTCPayServer.Plugins.BareBitcoin.dll"
+  "DEBUG_PLUGINS": "<absolute-path-to>/plugin/bin/Debug/net10.0/BTCPayServer.Plugins.BareBitcoin.dll"
 }' > BTCPayServer/appsettings.dev.json
 ```
 

@@ -8,6 +8,7 @@ using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace BTCPayServer.Plugins.BareBitcoin
 {
@@ -16,7 +17,7 @@ namespace BTCPayServer.Plugins.BareBitcoin
     {
         public override IBTCPayServerPlugin.PluginDependency[] Dependencies { get; } =
         {
-            new() { Identifier = nameof(BTCPayServer), Condition = ">=2.0.0" }
+            new() { Identifier = nameof(BTCPayServer), Condition = ">=2.3.7" }
             
         };
 
@@ -25,7 +26,7 @@ namespace BTCPayServer.Plugins.BareBitcoin
             applicationBuilder.AddUIExtension("ln-payment-method-setup-tab", "BareBitcoin/LNPaymentMethodSetupTab");
             applicationBuilder.AddSingleton<BareBitcoinInvoiceService>(provider =>
             {
-                var dataDir = provider.GetRequiredService<DataDirectories>().DataDir;
+                var dataDir = provider.GetRequiredService<IOptions<DataDirectories>>().Value.DataDir;
                 var filePath = Path.Combine(dataDir, "Plugins", "BareBitcoin", "tracked-invoices.json");
                 var logger = provider.GetRequiredService<ILoggerFactory>().CreateLogger<BareBitcoinInvoiceService>();
                 return new BareBitcoinInvoiceService(logger, filePath);
