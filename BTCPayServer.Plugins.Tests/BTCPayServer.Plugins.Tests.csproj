@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
     <PropertyGroup>
-        <TargetFramework>net8.0</TargetFramework>
+        <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
 
@@ -22,7 +22,13 @@
             <Private>true</Private>
             <ExcludeAssets>none</ExcludeAssets>
         </ProjectReference>
-        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj">
+        <ProjectReference Include="..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj"
+                          Condition="Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
+            <Properties>StaticWebAssetsEnabled=false</Properties>
+            <Private>false</Private>
+        </ProjectReference>
+        <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj"
+                          Condition="!Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj') and Exists('..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
             <Properties>StaticWebAssetsEnabled=false</Properties>
             <Private>false</Private>
         </ProjectReference>

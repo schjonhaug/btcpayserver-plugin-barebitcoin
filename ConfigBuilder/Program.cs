@@ -9,22 +9,21 @@ foreach (var plugin in plugins)
     {
         var assemblyConfigurationAttribute = typeof(Program).Assembly.GetCustomAttribute<AssemblyConfigurationAttribute>();
         var buildConfigurationName = assemblyConfigurationAttribute?.Configuration;
-        var x = Directory.GetDirectories(Path.Combine(plugin, "bin"));
-
-        var f = $"{Path.GetFullPath(plugin)}/bin/{buildConfigurationName}/net8.0/{Path.GetFileName(plugin)}.dll";
+        var pluginBinDir = Path.Combine(Path.GetFullPath(plugin), "bin");
+        var pluginDllName = $"{Path.GetFileName(plugin)}.dll";
+        var f = Path.Combine(pluginBinDir, buildConfigurationName ?? "Debug", "net10.0", pluginDllName);
         if (File.Exists(f))
             p += $"{f};";
         else
         {
-            
-            f = $"{Path.GetFullPath(plugin)}/bin/Debug/net8.0/{Path.GetFileName(plugin)}.dll";
+            f = Path.Combine(pluginBinDir, "Debug", "net10.0", pluginDllName);
             if (File.Exists(f))
                 p += $"{f};";
         }
         
         // if (x.Any(s => s.EndsWith("Altcoins-Debug")))
         // {
-        //     p += $"{Path.GetFullPath(plugin)}/bin/Altcoins-Debug/net8.0/{Path.GetFileName(plugin)}.dll;";
+        //     p += $"{Path.GetFullPath(plugin)}/bin/Altcoins-Debug/net10.0/{Path.GetFileName(plugin)}.dll;";
         // }
         // else
         // {
@@ -42,4 +41,18 @@ var content = JsonSerializer.Serialize(new
 });
 
 Console.WriteLine(content);
-await File.WriteAllTextAsync("../../../../submodules/BTCPayServer/BTCPayServer/appsettings.dev.json", content);
+var btcpayRootCandidates = new[]
+{
+    Path.GetFullPath("../../../../btcpayserver/BTCPayServer"),
+    Path.GetFullPath("../../../../submodules/btcpayserver/BTCPayServer")
+};
+
+var appSettingsPath = btcpayRootCandidates
+    .FirstOrDefault(path => File.Exists(Path.Combine(path, "BTCPayServer.csproj")));
+
+if (appSettingsPath is null)
+{
+    throw new DirectoryNotFoundException("Could not locate a BTCPayServer checkout in either the adjacent or submodule layout.");
+}
+
+await File.WriteAllTextAsync(Path.Combine(appSettingsPath, "appsettings.dev.json"), content);
