@@ -128,4 +128,8 @@ Create a new build with:
 3. Directory to the plugin's project: `plugin`
 4. Dotnet build configuration: `Release`
 
-After the build finishes successfully, release that build in the Plugin Builder UI. The GitHub release alone does not publish the plugin to the public BTCPay plugin directory.
+After the build finishes successfully, it will appear as a **pre-release** in the Plugin Builder. Pre-release builds are not visible to BTCPay Server instances unless the admin has explicitly enabled pre-release plugins.
+
+Use the pre-release stage to install and test the plugin on your own BTCPay Server instance before promoting it. Once verified, release the build in the Plugin Builder UI to make it available to all users.
+
+The GitHub release alone does not publish the plugin to the public BTCPay plugin directory.
