@@ -133,3 +133,14 @@ After the build finishes successfully, it will appear as a **pre-release** in th
 Use the pre-release stage to install and test the plugin on your own BTCPay Server instance before promoting it. Once verified, release the build in the Plugin Builder UI to make it available to all users.
 
 The GitHub release alone does not publish the plugin to the public BTCPay plugin directory.
+
+Before building a release, keep the tracked `submodules/btcpayserver` checkout aligned with the BTCPay Server version declared in the plugin dependency metadata. Plugin Builder uses the submodule layout, so an outdated submodule can surface transitive BTCPay dependency warnings even when local adjacent-checkout builds are clean.
+
+To update it, replace `v2.3.7` with the BTCPay Server version required by `plugin/BareBitcoinPlugin.cs`:
+
+```shell
+git submodule update --init submodules/btcpayserver
+git -C submodules/btcpayserver fetch --tags
+git -C submodules/btcpayserver checkout v2.3.7
+git add submodules/btcpayserver
+```
