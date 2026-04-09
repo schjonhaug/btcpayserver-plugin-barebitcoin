@@ -136,7 +136,7 @@ The GitHub release alone does not publish the plugin to the public BTCPay plugin
 
 Before building a release, keep the tracked `submodules/btcpayserver` checkout aligned with the BTCPay Server version declared in the plugin dependency metadata. Plugin Builder uses the submodule layout, so an outdated submodule can surface transitive BTCPay dependency warnings even when local adjacent-checkout builds are clean.
 
-To update it, replace `v2.3.7` with the BTCPay Server version required by `plugin/BTCPayServer.Plugins.BareBitcoin.csproj`:
+To update it, replace `v2.3.7` with the BTCPay Server version required by `plugin/BareBitcoinPlugin.cs`:
 
 ```shell
 git submodule update --init submodules/btcpayserver
