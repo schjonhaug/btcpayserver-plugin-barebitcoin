@@ -19,6 +19,11 @@ function askQuestion(query) {
   );
 }
 
+function getAccountName(account) {
+  const name = account.name || account.displayName || account.label;
+  return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
 async function main() {
   // Prompt for public and secret keys
   const publicKey = await askQuestion("Please enter your public key: ");
@@ -125,9 +130,10 @@ async function main() {
   // Build an array of account IDs for selection
   const accounts = data.accounts;
   accounts.forEach((acct, index) => {
+    const name = getAccountName(acct);
     const balance = Number(acct.availableBtc) === 0 ? "0" : Number(acct.availableBtc).toFixed(8);
     console.log(
-      `${index + 1}) ${acct.id} (Balance: ${balance} BTC)`
+      `${index + 1}) ${name ? `${name} - ` : ""}${acct.id} (Balance: ${balance} BTC)`
     );
   });
 
