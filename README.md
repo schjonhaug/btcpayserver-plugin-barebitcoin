@@ -121,14 +121,22 @@ To publish a new public plugin build for BTCPay Server, use the Plugin Builder:
 - URL: https://plugin-builder.btcpayserver.org/
 - Public plugin page: https://plugin-builder.btcpayserver.org/public/plugins/barebitcoin
 
-Create a new build with:
+Prepare a reproducible release tag with:
+
+```shell
+./pluginpacker.sh 2.0.1
+```
+
+The script updates the plugin version, runs tests, commits the version bump, creates and pushes the release tag, optionally creates a local `.btcpay` package, and prints the Plugin Builder form values.
+
+Create a new Plugin Builder build with:
 
 1. Git repository: `https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin`
-2. Git branch or tag: the release tag, for example `v1.1.2`
+2. Git branch or tag: the release tag, for example `v2.0.1`
 3. Directory to the plugin's project: `plugin`
 4. Dotnet build configuration: `Release`
 
-After the build finishes successfully, it will appear as a **pre-release** in the Plugin Builder. Pre-release builds are not visible to BTCPay Server instances unless the admin has explicitly enabled pre-release plugins.
+Every new Plugin Builder build starts as a **pre-release**. Pre-release builds are not visible to BTCPay Server instances unless the admin has explicitly enabled pre-release plugins.
 
 Use the pre-release stage to install and test the plugin on your own BTCPay Server instance before promoting it. Once verified, release the build in the Plugin Builder UI to make it available to all users.
 
