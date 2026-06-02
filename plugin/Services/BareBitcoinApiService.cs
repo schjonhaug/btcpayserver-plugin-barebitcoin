@@ -22,8 +22,9 @@ public class BareBitcoinApiService
     private readonly ILogger _logger;
     private readonly string _tracePrefix;
 
-    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _requestLocks = new();
-    private static readonly ConcurrentDictionary<string, long> _lastNonceByPublicKey = new();
+    private const int MaxAuthStatesBeforeCleanup = 1024;
+    private static readonly TimeSpan AuthStateIdleLifetime = TimeSpan.FromHours(1);
+    private static readonly ConcurrentDictionary<string, AuthState> _authStates = new();
 
     /// <summary>
     /// Initializes a new instance of the BareBitcoinApiService.
@@ -47,13 +48,11 @@ public class BareBitcoinApiService
     /// The nonce is guaranteed to be monotonically increasing for the public API key.
     /// </summary>
     /// <returns>The next nonce value to use</returns>
-    private long GetNextNonce()
+    private long GetNextNonce(AuthState authState)
     {
         var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        return _lastNonceByPublicKey.AddOrUpdate(
-            _publicKey,
-            currentTimestamp,
-            (_, lastNonce) => Math.Max(lastNonce + 1, currentTimestamp));
+        authState.LastNonce = Math.Max(authState.LastNonce + 1, currentTimestamp);
+        return authState.LastNonce;
     }
 
     /// <summary>
@@ -128,11 +127,14 @@ public class BareBitcoinApiService
             return await MakeRequest(method, path, data);
         }
         
-        var requestLock = _requestLocks.GetOrAdd(_publicKey, _ => new SemaphoreSlim(1, 1));
-        await requestLock.WaitAsync();
+        var authState = RetainAuthState();
+        var requestLockAcquired = false;
         try
         {
-            var nonce = GetNextNonce();
+            await authState.RequestLock.WaitAsync();
+            requestLockAcquired = true;
+
+            var nonce = GetNextNonce(authState);
             var hmac = CreateHmac(_privateKey, method, path, nonce, data);
 
             var additionalHeaders = new Dictionary<string, string>
@@ -146,8 +148,81 @@ public class BareBitcoinApiService
         }
         finally
         {
-            requestLock.Release();
+            if (requestLockAcquired)
+            {
+                authState.RequestLock.Release();
+            }
+
+            ReleaseAuthState(authState);
         }
+    }
+
+    private AuthState RetainAuthState()
+    {
+        while (true)
+        {
+            var authState = _authStates.GetOrAdd(_publicKey, _ => new AuthState());
+            lock (authState.Sync)
+            {
+                if (authState.Removed)
+                {
+                    continue;
+                }
+
+                authState.ReferenceCount++;
+                authState.LastUsed = DateTimeOffset.UtcNow;
+                return authState;
+            }
+        }
+    }
+
+    private void ReleaseAuthState(AuthState authState)
+    {
+        lock (authState.Sync)
+        {
+            authState.ReferenceCount--;
+            authState.LastUsed = DateTimeOffset.UtcNow;
+        }
+
+        PruneIdleAuthStates();
+    }
+
+    private static void PruneIdleAuthStates()
+    {
+        if (_authStates.Count <= MaxAuthStatesBeforeCleanup)
+        {
+            return;
+        }
+
+        var pruneBefore = DateTimeOffset.UtcNow - AuthStateIdleLifetime;
+        foreach (var entry in _authStates)
+        {
+            var authState = entry.Value;
+            lock (authState.Sync)
+            {
+                if (authState.ReferenceCount != 0 ||
+                    authState.Removed ||
+                    authState.LastUsed >= pruneBefore ||
+                    authState.RequestLock.CurrentCount == 0)
+                {
+                    continue;
+                }
+
+                authState.Removed = true;
+            }
+
+            _authStates.TryRemove(entry.Key, out _);
+        }
+    }
+
+    private sealed class AuthState
+    {
+        public object Sync { get; } = new();
+        public SemaphoreSlim RequestLock { get; } = new(1, 1);
+        public int ReferenceCount { get; set; }
+        public long LastNonce { get; set; }
+        public DateTimeOffset LastUsed { get; set; } = DateTimeOffset.UtcNow;
+        public bool Removed { get; set; }
     }
 
     /// <summary>
