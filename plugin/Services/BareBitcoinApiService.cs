@@ -25,6 +25,7 @@ public class BareBitcoinApiService
     private const int MaxAuthStatesBeforeCleanup = 1024;
     private static readonly TimeSpan AuthStateIdleLifetime = TimeSpan.FromHours(1);
     private static readonly ConcurrentDictionary<string, AuthState> _authStates = new();
+    private static int _isPruningAuthStates;
 
     /// <summary>
     /// Initializes a new instance of the BareBitcoinApiService.
@@ -194,24 +195,39 @@ public class BareBitcoinApiService
             return;
         }
 
-        var pruneBefore = DateTimeOffset.UtcNow - AuthStateIdleLifetime;
-        foreach (var entry in _authStates)
+        if (Interlocked.CompareExchange(ref _isPruningAuthStates, 1, 0) != 0)
         {
-            var authState = entry.Value;
-            lock (authState.Sync)
+            return;
+        }
+
+        try
+        {
+            var pruneBefore = DateTimeOffset.UtcNow - AuthStateIdleLifetime;
+            foreach (var entry in _authStates)
             {
-                if (authState.ReferenceCount != 0 ||
-                    authState.Removed ||
-                    authState.LastUsed >= pruneBefore ||
-                    authState.RequestLock.CurrentCount == 0)
+                var authState = entry.Value;
+                lock (authState.Sync)
                 {
-                    continue;
+                    if (authState.ReferenceCount != 0 ||
+                        authState.Removed ||
+                        authState.LastUsed >= pruneBefore ||
+                        authState.RequestLock.CurrentCount == 0)
+                    {
+                        continue;
+                    }
+
+                    authState.Removed = true;
                 }
 
-                authState.Removed = true;
+                if (_authStates.TryRemove(entry.Key, out _))
+                {
+                    authState.RequestLock.Dispose();
+                }
             }
-
-            _authStates.TryRemove(entry.Key, out _);
+        }
+        finally
+        {
+            Interlocked.Exchange(ref _isPruningAuthStates, 0);
         }
     }
 

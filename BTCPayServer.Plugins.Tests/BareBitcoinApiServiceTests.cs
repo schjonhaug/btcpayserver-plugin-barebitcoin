@@ -85,10 +85,14 @@ public class BareBitcoinApiServiceTests
     {
         var activeRequests = 0;
         var maxActiveRequests = 0;
+        var activeRequestsLock = new object();
         var handler = new AsyncRecordingHandler(async _ =>
         {
             var active = Interlocked.Increment(ref activeRequests);
-            maxActiveRequests = Math.Max(maxActiveRequests, active);
+            lock (activeRequestsLock)
+            {
+                maxActiveRequests = Math.Max(maxActiveRequests, active);
+            }
             await Task.Delay(25);
             Interlocked.Decrement(ref activeRequests);
             return new HttpResponseMessage(HttpStatusCode.OK)
