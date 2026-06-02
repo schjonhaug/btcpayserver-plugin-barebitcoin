@@ -1,5 +1,6 @@
 #nullable enable
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Http;
@@ -21,9 +22,8 @@ public class BareBitcoinApiService
     private readonly ILogger _logger;
     private readonly string _tracePrefix;
 
-    // Static nonce tracking with async-compatible lock
-    private static readonly SemaphoreSlim _nonceLock = new SemaphoreSlim(1, 1);
-    private static long _lastNonce;
+    private static readonly ConcurrentDictionary<string, SemaphoreSlim> _requestLocks = new();
+    private static readonly ConcurrentDictionary<string, long> _lastNonceByPublicKey = new();
 
     /// <summary>
     /// Initializes a new instance of the BareBitcoinApiService.
@@ -44,22 +44,16 @@ public class BareBitcoinApiService
 
     /// <summary>
     /// Gets the next nonce value for HMAC authentication in a thread-safe manner.
-    /// The nonce is guaranteed to be monotonically increasing and greater than the current timestamp.
+    /// The nonce is guaranteed to be monotonically increasing for the public API key.
     /// </summary>
     /// <returns>The next nonce value to use</returns>
-    private async Task<long> GetNextNonce()
+    private long GetNextNonce()
     {
-        await _nonceLock.WaitAsync();
-        try
-        {
-            var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeSeconds();
-            _lastNonce = Math.Max(_lastNonce + 1, currentTimestamp);
-            return _lastNonce;
-        }
-        finally
-        {
-            _nonceLock.Release();
-        }
+        var currentTimestamp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        return _lastNonceByPublicKey.AddOrUpdate(
+            _publicKey,
+            currentTimestamp,
+            (_, lastNonce) => Math.Max(lastNonce + 1, currentTimestamp));
     }
 
     /// <summary>
@@ -76,7 +70,6 @@ public class BareBitcoinApiService
     {
         try 
         {
-            // Convert millisecond nonce to string
             var nonceStr = nonce.ToString();
             // Encode data: nonce and raw data
             var encodedData = data != null ? $"{nonceStr}{data}" : nonceStr;
@@ -135,20 +128,26 @@ public class BareBitcoinApiService
             return await MakeRequest(method, path, data);
         }
         
-        // Nonce generation is serialized via _nonceLock to guarantee uniqueness.
-        // Requests may arrive at the server out of nonce order under concurrency;
-        // the BareBitcoin API validates nonce uniqueness, not arrival order.
-        var nonce = await GetNextNonce();
-        var hmac = CreateHmac(_privateKey, method, path, nonce, data);
-
-        var additionalHeaders = new Dictionary<string, string>
+        var requestLock = _requestLocks.GetOrAdd(_publicKey, _ => new SemaphoreSlim(1, 1));
+        await requestLock.WaitAsync();
+        try
         {
-            ["x-bb-api-hmac"] = hmac,
-            ["x-bb-api-nonce"] = nonce.ToString()
-        };
+            var nonce = GetNextNonce();
+            var hmac = CreateHmac(_privateKey, method, path, nonce, data);
 
-        _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
-        return await MakeRequest(method, path, data, additionalHeaders);
+            var additionalHeaders = new Dictionary<string, string>
+            {
+                ["x-bb-api-hmac"] = hmac,
+                ["x-bb-api-nonce"] = nonce.ToString()
+            };
+
+            _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
+            return await MakeRequest(method, path, data, additionalHeaders);
+        }
+        finally
+        {
+            requestLock.Release();
+        }
     }
 
     /// <summary>

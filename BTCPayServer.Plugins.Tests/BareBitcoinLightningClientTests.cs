@@ -127,6 +127,37 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_UsesApiKeyOnlyAuthHeaders()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new RecordingMessageHandler(ApiJson("INVOICE_STATUS_UNPAID"));
+        var client = CreateClient(handler, invoiceService);
+
+        await client.GetInvoice("inv-auth");
+
+        var request = Assert.Single(handler.Requests);
+        Assert.True(request.Headers.Contains("x-bb-api-key"));
+        Assert.False(request.Headers.Contains("x-bb-api-nonce"));
+        Assert.False(request.Headers.Contains("x-bb-api-hmac"));
+    }
+
+    [Fact]
+    public async Task CreateInvoice_UsesFullHmacAuthHeaders()
+    {
+        var invoiceService = new ThrowingInvoiceService();
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService);
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        var request = Assert.Single(handler.Requests);
+        Assert.True(request.Headers.Contains("x-bb-api-key"));
+        Assert.True(request.Headers.Contains("x-bb-api-nonce"));
+        Assert.True(request.Headers.Contains("x-bb-api-hmac"));
+    }
+
+    [Fact]
     public async Task CreateInvoice_PropagatesOperationCanceledException_FromTrackInvoice()
     {
         var invoiceService = new ThrowingInvoiceService(
@@ -423,6 +454,22 @@ public class BareBitcoinLightningClientTests
         protected override Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
+            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
+            });
+        }
+    }
+
+    private sealed class RecordingMessageHandler(string responseBody) : HttpMessageHandler
+    {
+        private readonly ConcurrentQueue<HttpRequestMessage> _requests = new();
+        public HttpRequestMessage[] Requests => _requests.ToArray();
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _requests.Enqueue(request);
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")

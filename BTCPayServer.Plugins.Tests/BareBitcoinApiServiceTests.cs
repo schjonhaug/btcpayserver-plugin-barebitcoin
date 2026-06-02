@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -80,7 +81,47 @@ public class BareBitcoinApiServiceTests
     }
 
     [Fact]
-    public async Task MakeAuthenticatedRequest_ConcurrentCalls_ProduceUniqueNonces()
+    public async Task MakeAuthenticatedRequest_ConcurrentSignedPostCalls_DoNotOverlapForSamePublicKey()
+    {
+        var activeRequests = 0;
+        var maxActiveRequests = 0;
+        var handler = new AsyncRecordingHandler(async _ =>
+        {
+            var active = Interlocked.Increment(ref activeRequests);
+            maxActiveRequests = Math.Max(maxActiveRequests, active);
+            await Task.Delay(25);
+            Interlocked.Decrement(ref activeRequests);
+            return new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent("{}", Encoding.UTF8, "application/json")
+            };
+        });
+        var httpClient = new HttpClient(handler);
+        var publicKey = $"public-key-{Guid.NewGuid()}";
+        var service1 = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: publicKey,
+            httpClient: httpClient,
+            logger: NullLogger.Instance);
+        var service2 = new BareBitcoinApiService(
+            privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            publicKey: publicKey,
+            httpClient: httpClient,
+            logger: NullLogger.Instance);
+
+        const int concurrentRequests = 20;
+        var tasks = Enumerable.Range(0, concurrentRequests)
+            .Select(i => (i % 2 == 0 ? service1 : service2).MakeAuthenticatedRequest("POST", "/v1/test", "{}"))
+            .ToArray();
+
+        await Task.WhenAll(tasks);
+
+        Assert.Equal(concurrentRequests, handler.Requests.Length);
+        Assert.Equal(1, maxActiveRequests);
+    }
+
+    [Fact]
+    public async Task MakeAuthenticatedRequest_ConcurrentSignedPostCalls_ProduceMillisecondIncreasingNonces()
     {
         var handler = new RecordingHandler(_ => new HttpResponseMessage(HttpStatusCode.OK)
         {
@@ -89,36 +130,49 @@ public class BareBitcoinApiServiceTests
         var httpClient = new HttpClient(handler);
         var service = new BareBitcoinApiService(
             privateKey: Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
-            publicKey: "public-key",
+            publicKey: $"public-key-{Guid.NewGuid()}",
             httpClient: httpClient,
             logger: NullLogger.Instance);
 
         const int concurrentRequests = 20;
         var tasks = Enumerable.Range(0, concurrentRequests)
-            .Select(_ => service.MakeAuthenticatedRequest("GET", "/v1/test"))
+            .Select(_ => service.MakeAuthenticatedRequest("POST", "/v1/test", "{}"))
             .ToArray();
 
         await Task.WhenAll(tasks);
 
-        Assert.Equal(concurrentRequests, handler.Requests.Length);
-
         var nonces = handler.Requests
-            .Select(r => r.Headers.GetValues("x-bb-api-nonce").Single())
+            .Select(r => long.Parse(r.Headers.GetValues("x-bb-api-nonce").Single()))
             .ToArray();
 
         Assert.Equal(concurrentRequests, nonces.Distinct().Count());
+        Assert.All(nonces, nonce => Assert.True(nonce >= 1_000_000_000_000));
+        Assert.True(nonces.SequenceEqual(nonces.OrderBy(n => n)));
     }
 
     private sealed class RecordingHandler(Func<HttpRequestMessage, HttpResponseMessage> responder) : HttpMessageHandler
     {
         private readonly Func<HttpRequestMessage, HttpResponseMessage> _responder = responder;
         public HttpRequestMessage[] Requests => _requests.ToArray();
-        private readonly System.Collections.Concurrent.ConcurrentBag<HttpRequestMessage> _requests = [];
+        private readonly ConcurrentQueue<HttpRequestMessage> _requests = [];
 
         protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
-            _requests.Add(request);
+            _requests.Enqueue(request);
             return Task.FromResult(_responder(request));
+        }
+    }
+
+    private sealed class AsyncRecordingHandler(Func<HttpRequestMessage, Task<HttpResponseMessage>> responder) : HttpMessageHandler
+    {
+        private readonly Func<HttpRequestMessage, Task<HttpResponseMessage>> _responder = responder;
+        public HttpRequestMessage[] Requests => _requests.ToArray();
+        private readonly ConcurrentQueue<HttpRequestMessage> _requests = [];
+
+        protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+        {
+            _requests.Enqueue(request);
+            return await _responder(request);
         }
     }
 }
