@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 "use strict";
 
-const crypto = require("crypto");
 const readline = require("readline");
 const https = require("https");
 
@@ -38,35 +37,6 @@ async function main() {
   // Set up request components
   const method = "GET";
   const path = "/v1/user/bitcoin-accounts";
-  const nonce = Math.floor(Date.now() / 1000).toString();
-
-  // Create nonce hash (binary output)
-  const nonceHash = crypto
-    .createHash("sha256")
-    .update(nonce, "utf8")
-    .digest();
-
-  // Concatenate method, path, and nonceHash
-  const messageBuffer = Buffer.concat([
-    Buffer.from(method + path, "utf8"),
-    nonceHash,
-  ]);
-
-  // Decode secret key (base64-decoded)
-  let secretDecoded;
-  try {
-    secretDecoded = Buffer.from(secretKey, "base64");
-  } catch (err) {
-    console.error("Error: Failed to decode secret key from base64.");
-    process.exit(1);
-  }
-
-  // Create HMAC (binary output, then base64-encode it)
-  const hmacBuffer = crypto
-    .createHmac("sha256", secretDecoded)
-    .update(messageBuffer)
-    .digest();
-  const hmac = hmacBuffer.toString("base64");
 
   // Set up API request options
   const options = {
@@ -75,9 +45,7 @@ async function main() {
     path: path,
     method: method,
     headers: {
-      "x-bb-api-hmac": hmac,
       "x-bb-api-key": publicKey,
-      "x-bb-api-nonce": nonce,
     },
   };
 

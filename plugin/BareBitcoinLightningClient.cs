@@ -144,7 +144,7 @@ public class BareBitcoinLightningClient : ILightningClient
         string response;
         try
         {
-            response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}");
+            response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}", useSimpleAuth: true);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
