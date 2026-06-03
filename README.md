@@ -55,7 +55,7 @@ Use the provided script to generate your BTCPay Server connection string:
 
 Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The plugin and tests target `net10.0`.
 
-This branch targets BTCPay Server `2.3.7` and newer. For BTCPay Server `2.3.6` and older, keep using an older plugin release that still targets `.NET 8`.
+This branch targets BTCPay Server `2.3.9` and newer. For BTCPay Server `2.3.8` and older, keep using an older plugin release.
 
 Use one of these BTCPay Server source layouts:
 
@@ -144,11 +144,11 @@ The GitHub release alone does not publish the plugin to the public BTCPay plugin
 
 Before building a release, keep the tracked `submodules/btcpayserver` checkout aligned with the BTCPay Server version declared in the plugin dependency metadata. Plugin Builder uses the submodule layout, so an outdated submodule can surface transitive BTCPay dependency warnings even when local adjacent-checkout builds are clean.
 
-To update it, replace `v2.3.7` with the BTCPay Server version required by `plugin/BareBitcoinPlugin.cs`:
+To update it, replace `v2.3.9` with the BTCPay Server version required by `plugin/BareBitcoinPlugin.cs`:
 
 ```shell
 git submodule update --init submodules/btcpayserver
 git -C submodules/btcpayserver fetch --tags
-git -C submodules/btcpayserver checkout v2.3.7
+git -C submodules/btcpayserver checkout v2.3.9
 git add submodules/btcpayserver
 ```

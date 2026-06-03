@@ -316,7 +316,7 @@ public class LogThrottleTests
     }
 
     [Fact]
-    public void ConcurrentEviction_DoesNotThrowOrCorruptState()
+    public async Task ConcurrentEviction_DoesNotThrowOrCorruptState()
     {
         var logger = new RecordingLogger();
         long now = Stopwatch.GetTimestamp();
@@ -348,7 +348,7 @@ public class LogThrottleTests
             });
         }
 
-        Task.WaitAll(tasks);
+        await Task.WhenAll(tasks);
 
         // All tasks completed without exceptions; state is consistent
         Assert.True(throttle.StateCount > 0);
