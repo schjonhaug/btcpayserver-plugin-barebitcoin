@@ -8,7 +8,7 @@
     <PropertyGroup>
         <Product>Bare Bitcoin</Product>
         <Description>Bare Bitcoin Lightning support</Description>
-        <Version>2.0.0</Version>
+        <Version>2.0.1</Version>
         <Authors>Andreas Schjønhaug</Authors>
         <Company>Enogtjue</Company>
         <RepositoryUrl>https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin</RepositoryUrl>
