@@ -1,0 +1,21 @@
+version: 2
+updates:
+  - package-ecosystem: "nuget"
+    directories:
+      - "/BTCPayServer.Plugins.Tests"
+      - "/ConfigBuilder"
+      - "/plugin"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "docker"
+    directory: "/ConfigBuilder"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+  - package-ecosystem: "gitsubmodule"
+    directory: "/"
+    schedule:
+      interval: "weekly"
