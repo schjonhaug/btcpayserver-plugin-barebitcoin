@@ -363,9 +363,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             }
 
             var persisted = token.ToObject<PersistedRegistry>();
-            if (persisted?.Version == 2 && persisted.Scopes is not null)
+            if (persisted?.Version == 2)
             {
-                foreach (var invoiceId in persisted.Scopes.Values
+                var accountScopedInvoices = persisted.Scopes is null
+                    ? Enumerable.Empty<string[]>()
+                    : persisted.Scopes.Values;
+                foreach (var invoiceId in accountScopedInvoices
                              .Where(invoiceIds => invoiceIds is not null)
                              .SelectMany(invoiceIds => invoiceIds!)
                              .Concat(persisted.UnassignedLegacyInvoices ?? Array.Empty<string>())

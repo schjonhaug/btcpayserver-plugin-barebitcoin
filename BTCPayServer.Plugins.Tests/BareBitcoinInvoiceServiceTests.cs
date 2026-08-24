@@ -197,6 +197,22 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task AccountScopedVersion2Registry_WithNullScopes_MigratesItsLegacyQuarantine()
+    {
+        File.WriteAllText(FilePath,
+            "{\"version\":2,\"scopes\":null,\"unassignedLegacyInvoices\":[\"legacy\"]}");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await service.FlushAsync();
+
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"scopes\":{}", persisted);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy\"]", persisted);
+        Assert.True(await service.TryClaimLegacyInvoice(Scope, "legacy"));
+    }
+
+    [Fact]
     public async Task ConcurrentLegacyReclamation_AssignsInvoiceToExactlyOneScope()
     {
         File.WriteAllText(FilePath, "[\"legacy-a\"]");

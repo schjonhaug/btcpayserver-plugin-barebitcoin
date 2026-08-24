@@ -14,12 +14,18 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IBareBitcoinInvoiceService _invoiceService;
+    private readonly IBareBitcoinStoreBinding _storeBinding;
 
-    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IBareBitcoinInvoiceService invoiceService)
+    public BareBitcoinLightningConnectionStringHandler(
+        IHttpClientFactory httpClientFactory,
+        ILoggerFactory loggerFactory,
+        IBareBitcoinInvoiceService invoiceService,
+        IBareBitcoinStoreBinding storeBinding)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
         _invoiceService = invoiceService;
+        _storeBinding = storeBinding;
     }
 
 
@@ -75,13 +81,20 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         if (!kv.TryGetValue("store-id", out var storeId))
         {
-            error = "The key 'store-id' is not found. Add this BTCPay store's ID to isolate its invoices";
+            error = "The key 'store-id' is not found. Open this store's Lightning setup and save the connection again";
             return null;
         }
 
         if (string.IsNullOrWhiteSpace(storeId))
         {
             error = "The key 'store-id' must not be empty";
+            return null;
+        }
+
+        if (!kv.TryGetValue("store-binding", out var protectedStoreId) ||
+            !_storeBinding.IsValid(storeId, protectedStoreId))
+        {
+            error = "The key 'store-binding' is missing or does not authenticate this BTCPay store. Open this store's Lightning setup and save the connection again";
             return null;
         }
 

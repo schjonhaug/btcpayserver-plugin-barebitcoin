@@ -1,6 +1,8 @@
 ﻿@model BTCPayServer.Models.StoreViewModels.LightningNodeViewModel
+@inject BTCPayServer.Plugins.BareBitcoin.Services.IBareBitcoinStoreBinding StoreBinding
 @{
     var storeId = ViewContext.RouteData.Values["storeId"]?.ToString() ?? Model.StoreId;
+    var protectedStoreId = string.IsNullOrWhiteSpace(storeId) ? string.Empty : StoreBinding.Protect(storeId);
     if (Model.CryptoCode != "BTC")
     {
         return;
@@ -20,18 +22,31 @@
                 .split(";")
                 .map(segment => segment.trim())
                 .filter(Boolean);
-            const isBareBitcoin = segments.some(segment =>
-                segment.toLowerCase() === "type=barebitcoin");
+            const keyAndValue = segment => {
+                const separator = segment.indexOf("=");
+                if (separator < 0) return [segment.trim().toLowerCase(), ""];
+                return [
+                    segment.slice(0, separator).trim().toLowerCase(),
+                    segment.slice(separator + 1).trim()
+                ];
+            };
+            const isBareBitcoin = segments.some(segment => {
+                const [key, value] = keyAndValue(segment);
+                return key === "type" && value.toLowerCase() === "barebitcoin";
+            });
             if (!isBareBitcoin) return;
 
-            const withoutStoreId = segments.filter(segment =>
-                !segment.toLowerCase().startsWith("store-id="));
-            withoutStoreId.push(`store-id=${template.dataset.storeId}`);
-            connectionString.value = withoutStoreId.join(";");
+            const withoutStoreBinding = segments.filter(segment => {
+                const [key] = keyAndValue(segment);
+                return key !== "store-id" && key !== "store-binding";
+            });
+            withoutStoreBinding.push(`store-id=${template.dataset.storeId}`);
+            withoutStoreBinding.push(`store-binding=${template.dataset.storeBinding}`);
+            connectionString.value = withoutStoreBinding.join(";");
         });
     });
 </script>
-<template id="barebitcoin" data-store-id="@storeId">
+<template id="barebitcoin" data-store-id="@storeId" data-store-binding="@protectedStoreId">
     <div class="accordion-item">
         <h2 class="accordion-header" id="CustomBareBitcoinHeader">
             <button type="button" class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#CustomBareBitcoinContent" aria-controls="CustomBareBitcoinContent" aria-expanded="false">

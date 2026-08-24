@@ -7,6 +7,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using BTCPayServer.Plugins.BareBitcoin;
 using BTCPayServer.Plugins.BareBitcoin.Services;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NBitcoin;
 using Xunit;
@@ -30,7 +31,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
     }
 
     private const string BaseConnectionString =
-        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123";
+        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123;store-binding=signed-store-123";
 
     private BareBitcoinLightningConnectionStringHandler CreateHandler()
     {
@@ -45,7 +46,11 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
             }
             """)));
         var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(_tempDir, "tracked-invoices.json"));
-        return new BareBitcoinLightningConnectionStringHandler(httpClientFactory, NullLoggerFactory.Instance, invoiceService);
+        return new BareBitcoinLightningConnectionStringHandler(
+            httpClientFactory,
+            NullLoggerFactory.Instance,
+            invoiceService,
+            new StubStoreBinding());
     }
 
     [Fact]
@@ -137,7 +142,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 
         Assert.Null(client);
         Assert.Contains("store-id", error);
-        Assert.Contains("isolate", error);
+        Assert.Contains("Lightning setup", error);
     }
 
     [Theory]
@@ -155,6 +160,58 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 
         Assert.Null(client);
         Assert.Equal("The key 'store-id' must not be empty", error);
+    }
+
+    [Fact]
+    public void Create_WithoutStoreBinding_ReturnsAuthenticationError()
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Contains("store-binding", error);
+        Assert.Contains("authenticate", error);
+    }
+
+    [Theory]
+    [InlineData("forged")]
+    [InlineData("signed-other-store")]
+    public void Create_WithInvalidOrMismatchedStoreBinding_ReturnsAuthenticationError(string storeBinding)
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123;store-binding={storeBinding}",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Contains("store-binding", error);
+        Assert.Contains("authenticate", error);
+    }
+
+    [Fact]
+    public void StoreBinding_AuthenticatesOnlyTheProtectedStore()
+    {
+        var binding = new BareBitcoinStoreBinding(new EphemeralDataProtectionProvider());
+        var protectedStore = binding.Protect("store-a");
+
+        Assert.True(binding.IsValid("store-a", protectedStore));
+        Assert.True(binding.IsValid(" store-a ", protectedStore));
+        Assert.False(binding.IsValid("store-b", protectedStore));
+        Assert.False(binding.IsValid("store-a", protectedStore + "tampered"));
+    }
+
+    private sealed class StubStoreBinding : IBareBitcoinStoreBinding
+    {
+        public string Protect(string storeId) => $"signed-{storeId.Trim()}";
+
+        public bool IsValid(string storeId, string protectedStoreId) =>
+            StringComparer.Ordinal.Equals(Protect(storeId), protectedStoreId);
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
