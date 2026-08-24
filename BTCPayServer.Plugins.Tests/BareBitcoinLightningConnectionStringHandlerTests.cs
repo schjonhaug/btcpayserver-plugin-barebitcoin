@@ -33,7 +33,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
     private const string BaseConnectionString =
         "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123;store-binding=signed-store-123";
 
-    private BareBitcoinLightningConnectionStringHandler CreateHandler()
+    private BareBitcoinLightningConnectionStringHandler CreateHandler(string? authenticatedStoreId = null)
     {
         var httpClientFactory = new StubHttpClientFactory(new HttpClient(new JsonHandler("""
             {
@@ -50,7 +50,8 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
             httpClientFactory,
             NullLoggerFactory.Instance,
             invoiceService,
-            new StubStoreBinding());
+            new StubStoreBinding(),
+            new StubStoreContext(authenticatedStoreId));
     }
 
     [Fact]
@@ -62,6 +63,29 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 
         Assert.NotNull(client);
         Assert.Null(error);
+    }
+
+    [Fact]
+    public void Create_WithBindingForAuthenticatedStore_ReturnsClient()
+    {
+        var handler = CreateHandler("store-123");
+
+        var client = handler.Create(BaseConnectionString, Network.Main, out var error);
+
+        Assert.NotNull(client);
+        Assert.Null(error);
+    }
+
+    [Fact]
+    public void Create_WithValidBindingCopiedFromAnotherStore_ReturnsIsolationError()
+    {
+        var handler = CreateHandler("store-b");
+
+        var client = handler.Create(BaseConnectionString, Network.Main, out var error);
+
+        Assert.Null(client);
+        Assert.Contains("authenticated BTCPay store", error);
+        Assert.Contains("does not match", error);
     }
 
     [Fact]
@@ -212,6 +236,11 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 
         public bool IsValid(string storeId, string protectedStoreId) =>
             StringComparer.Ordinal.Equals(Protect(storeId), protectedStoreId);
+    }
+
+    private sealed class StubStoreContext(string? storeId) : IBareBitcoinStoreContext
+    {
+        public string? GetCurrentStoreId() => storeId;
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory

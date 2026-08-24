@@ -15,17 +15,20 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
     private readonly ILoggerFactory _loggerFactory;
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly IBareBitcoinStoreBinding _storeBinding;
+    private readonly IBareBitcoinStoreContext _storeContext;
 
     public BareBitcoinLightningConnectionStringHandler(
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
         IBareBitcoinInvoiceService invoiceService,
-        IBareBitcoinStoreBinding storeBinding)
+        IBareBitcoinStoreBinding storeBinding,
+        IBareBitcoinStoreContext storeContext)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
         _invoiceService = invoiceService;
         _storeBinding = storeBinding;
+        _storeContext = storeContext;
     }
 
 
@@ -95,6 +98,14 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             !_storeBinding.IsValid(storeId, protectedStoreId))
         {
             error = "The key 'store-binding' is missing or does not authenticate this BTCPay store. Open this store's Lightning setup and save the connection again";
+            return null;
+        }
+
+        var authenticatedStoreId = _storeContext.GetCurrentStoreId();
+        if (authenticatedStoreId is not null &&
+            !StringComparer.Ordinal.Equals(authenticatedStoreId, storeId.Trim()))
+        {
+            error = "The authenticated BTCPay store does not match this Bare Bitcoin connection's store binding";
             return null;
         }
 
