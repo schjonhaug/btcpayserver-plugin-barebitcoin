@@ -9,7 +9,7 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 ## Limitations
 
-Sending payments over Lightning Network is not yet supported.
+**Receive-only Lightning integration** — You can receive sats into your Bare Bitcoin account through BTCPay Server. Sending sats from your Bare Bitcoin account through BTCPay Server, including refunds, is not supported.
 
 ## Installation
 
