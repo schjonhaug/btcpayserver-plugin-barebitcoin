@@ -80,6 +80,22 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_ReturnsInvoice_WhenTrackInvoiceThrowsInvalidDataException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new InvalidDataException("unsupported registry schema"));
+
+        var handler = new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID"));
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.GetInvoice("inv-unsupported-schema");
+
+        Assert.NotNull(result);
+        Assert.Equal("inv-unsupported-schema", result.Id);
+        Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
+    }
+
+    [Fact]
     public async Task OwningStoreStartupPoll_ReclaimsUnpaidLegacyInvoiceIntoItsScope()
     {
         var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -195,6 +211,22 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_ReturnsPaidInvoice_WhenLegacyClaimThrowsInvalidDataException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            claimException: new InvalidDataException("unsupported registry schema"));
+
+        var handler = new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID"));
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.GetInvoice("inv-paid-unsupported-schema");
+
+        Assert.NotNull(result);
+        Assert.Equal("inv-paid-unsupported-schema", result.Id);
+        Assert.Equal(LightningInvoiceStatus.Paid, result.Status);
+    }
+
+    [Fact]
     public async Task GetInvoice_PropagatesOperationCanceledException_FromTrackInvoice()
     {
         var invoiceService = new ThrowingInvoiceService(
@@ -223,6 +255,22 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("dep-1", result.Id);
         Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
         Assert.Equal(TestBolt11, result.BOLT11);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_ReturnsInvoice_WhenTrackInvoiceThrowsInvalidDataException()
+    {
+        var invoiceService = new ThrowingInvoiceService(
+            trackException: new InvalidDataException("unsupported registry schema"));
+
+        var handler = new FakeMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        Assert.Equal("dep-1", result.Id);
+        Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
     }
 
     [Fact]
@@ -325,6 +373,7 @@ public class BareBitcoinLightningClientTests
     private sealed class ThrowingInvoiceService(
         Exception? trackException = null,
         Exception? untrackException = null,
+        Exception? claimException = null,
         IReadOnlyCollection<string>? trackedInvoices = null) : IBareBitcoinInvoiceService
     {
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
@@ -338,7 +387,9 @@ public class BareBitcoinLightningClientTests
                 : Task.CompletedTask;
 
         public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => Task.FromResult(false);
+            => claimException is not null
+                ? Task.FromException<bool>(claimException)
+                : Task.FromResult(false);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
