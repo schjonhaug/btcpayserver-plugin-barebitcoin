@@ -15,9 +15,11 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 ## Tracked Invoice Migration
 
-Plugin versions that used the legacy flat tracked-invoice file did not persist which Bare Bitcoin account owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.
+Plugin versions that used the legacy flat tracked-invoice file, or schema version 2 account-scoped state, did not persist which BTCPay store owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.
 
-BTCPay Server independently persists each monitored Lightning invoice with its owning store and connection. During startup reconciliation, BTCPay calls `GetInvoice` through that store's connection rather than through the plugin's legacy registry. An invoice is then atomically reclaimed into the correct account scope; concurrent or later claims from another scope are ignored. A paid invoice is returned directly to BTCPay for payment recording and remains scoped until the normal listener-delivery path untracks it, preserving crash recovery. Expired invoices are removed after the successful terminal lookup. This restores monitoring without assigning a legacy ID to the first or every Bare Bitcoin connection.
+BTCPay Server independently persists each monitored Lightning invoice with its owning store and connection. During startup reconciliation, BTCPay calls `GetInvoice` through that store's connection rather than through the plugin's legacy registry. An invoice is then atomically reclaimed into the correct store connection scope; concurrent or later claims from another scope are ignored. A paid invoice is returned directly to BTCPay for payment recording and remains scoped until the normal listener-delivery path untracks it, preserving crash recovery. Expired invoices are removed after the successful terminal lookup. This restores monitoring without assigning a legacy ID to the first or every Bare Bitcoin connection.
+
+The persisted connection string requires `store-id`, which must be the ID of the BTCPay store that owns the connection. The BTCPay web setup automatically injects the current store ID before testing or saving a Bare Bitcoin connection. This keeps invoice tracking isolated when multiple stores use the same Bare Bitcoin account or API credentials. Direct API or manual configuration outside this setup page must append `store-id` explicitly. Existing configurations without it can be upgraded by opening the web setup and saving again.
 
 If the plugin encounters a registry schema newer than it understands, it leaves the file unchanged and disables tracking mutations instead of overwriting future-version state. Installing a compatible plugin version or an explicit migration is then required before persistence resumes.
 
@@ -57,7 +59,7 @@ Use the provided script to generate your BTCPay Server connection string:
 1. In BTCPay Server, go to your store's **Lightning** settings
 2. Select **Bare Bitcoin** as the Lightning connection type
 3. Paste your connection string
-4. Save
+4. Test or save the connection; BTCPay automatically adds this store's `store-id`
 
 ## Development
 
@@ -140,7 +142,7 @@ The container runs as root so it can write `appsettings.dev.json` on the bind mo
 Run the test suite through Microsoft Testing Platform:
 
 ```shell
-dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj
+dotnet test --project BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj --minimum-expected-tests 1
 ```
 
 After building, the test executable can also be run directly:

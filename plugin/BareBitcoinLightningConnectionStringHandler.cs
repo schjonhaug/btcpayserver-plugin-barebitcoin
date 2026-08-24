@@ -73,6 +73,18 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             return null;
         }
 
+        if (!kv.TryGetValue("store-id", out var storeId))
+        {
+            error = "The key 'store-id' is not found. Add this BTCPay store's ID to isolate its invoices";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(storeId))
+        {
+            error = "The key 'store-id' must not be empty";
+            return null;
+        }
+
         var maxPollConcurrency = 10;
         if (kv.TryGetValue("max-poll-concurrency", out var maxPollConcurrencyStr))
         {
@@ -91,7 +103,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
       
 
         try

@@ -12,15 +12,15 @@ using Newtonsoft.Json.Linq;
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
-/// Singleton service that maintains account-isolated registries of invoices that need to be tracked for payment status.
-/// Each client and listener can only access invoices through its owning Bare Bitcoin account scope.
+/// Singleton service that maintains store-connection-isolated registries of invoices that need to be tracked for payment status.
+/// Each client and listener can only access invoices through its owning BTCPay store connection scope.
 /// Provides thread-safe operations for adding, removing, and querying tracked invoices.
 /// Tracked invoices are persisted to disk so they survive server restarts.
 /// Disk writes are batched to avoid excessive I/O under high invoice throughput.
 /// </summary>
 public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
-    private const int CurrentSchemaVersion = 2;
+    private const int CurrentSchemaVersion = 3;
     private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _invoiceOwners = new(StringComparer.Ordinal);
     private readonly HashSet<string> _unassignedLegacyInvoices = new(StringComparer.Ordinal);
@@ -363,6 +363,26 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             }
 
             var persisted = token.ToObject<PersistedRegistry>();
+            if (persisted?.Version == 2 && persisted.Scopes is not null)
+            {
+                foreach (var invoiceId in persisted.Scopes.Values
+                             .Where(invoiceIds => invoiceIds is not null)
+                             .SelectMany(invoiceIds => invoiceIds!)
+                             .Concat(persisted.UnassignedLegacyInvoices ?? Array.Empty<string>())
+                             .Where(id => !string.IsNullOrWhiteSpace(id)))
+                {
+                    _unassignedLegacyInvoices.Add(invoiceId);
+                }
+
+                _logger.LogWarning(
+                    "Quarantined {Count} invoices from account-scoped registry schema version 2 because it has no BTCPay store ownership information; " +
+                    "owning-store startup reconciliation must reclaim them into store-scoped state",
+                    _unassignedLegacyInvoices.Count);
+                _dirty = true;
+                ScheduleFlush();
+                return;
+            }
+
             if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
             {
                 _diskPersistenceDisabledReason =
@@ -402,7 +422,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             }
 
             _logger.LogInformation(
-                "Loaded {Count} tracked invoices across {ScopeCount} account scopes and {LegacyCount} quarantined legacy invoices from disk",
+                "Loaded {Count} tracked invoices across {ScopeCount} store connection scopes and {LegacyCount} quarantined legacy invoices from disk",
                 assignedInvoiceIds.Count, _trackedInvoiceRegistry.Count, _unassignedLegacyInvoices.Count);
 
             if (_dirty)

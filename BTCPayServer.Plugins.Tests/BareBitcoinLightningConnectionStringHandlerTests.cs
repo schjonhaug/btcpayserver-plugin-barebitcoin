@@ -30,7 +30,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
     }
 
     private const string BaseConnectionString =
-        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123";
+        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123";
 
     private BareBitcoinLightningConnectionStringHandler CreateHandler()
     {
@@ -123,6 +123,38 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 
         Assert.Null(client);
         Assert.Equal("The key 'account-id' must not be empty", error);
+    }
+
+    [Fact]
+    public void Create_WithoutStoreId_ReturnsIsolationError()
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Contains("store-id", error);
+        Assert.Contains("isolate", error);
+    }
+
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("   ")]
+    public void Create_WithBlankStoreId_ReturnsError(string storeId)
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id={storeId}",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Equal("The key 'store-id' must not be empty", error);
     }
 
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory

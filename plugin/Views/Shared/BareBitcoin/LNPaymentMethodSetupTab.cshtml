@@ -1,6 +1,6 @@
 ﻿@model BTCPayServer.Models.StoreViewModels.LightningNodeViewModel
 @{
-    var storeId = Model.StoreId;
+    var storeId = ViewContext.RouteData.Values["storeId"]?.ToString() ?? Model.StoreId;
     if (Model.CryptoCode != "BTC")
     {
         return;
@@ -9,14 +9,29 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", function () {
-       
-       const customNodeAccordian = document.getElementById("CustomNodeSupport");
-       const template = document.getElementById("barebitcoin");
-       customNodeAccordian.appendChild(template.content.cloneNode(true));
-        
+        const customNodeAccordian = document.getElementById("CustomNodeSupport");
+        const template = document.getElementById("barebitcoin");
+        customNodeAccordian.appendChild(template.content.cloneNode(true));
+
+        const connectionString = document.getElementById("ConnectionString");
+        const form = connectionString?.closest("form");
+        form?.addEventListener("submit", function () {
+            const segments = connectionString.value
+                .split(";")
+                .map(segment => segment.trim())
+                .filter(Boolean);
+            const isBareBitcoin = segments.some(segment =>
+                segment.toLowerCase() === "type=barebitcoin");
+            if (!isBareBitcoin) return;
+
+            const withoutStoreId = segments.filter(segment =>
+                !segment.toLowerCase().startsWith("store-id="));
+            withoutStoreId.push(`store-id=${template.dataset.storeId}`);
+            connectionString.value = withoutStoreId.join(";");
+        });
     });
 </script>
-<template id="barebitcoin">
+<template id="barebitcoin" data-store-id="@storeId">
     <div class="accordion-item">
         <h2 class="accordion-header" id="CustomBareBitcoinHeader">
             <button type="button" class="accordion-button collapsed" data-bs-toggle="collapse" data-bs-target="#CustomBareBitcoinContent" aria-controls="CustomBareBitcoinContent" aria-expanded="false">
@@ -36,6 +51,7 @@
                     <li>Create API keys with both Read and Receive permissions</li>
                     <li>Save your public and private keys securely</li>
                     <li>Run the provided setup script to select your Bitcoin account and generate the connection string</li>
+                    <li>BTCPay automatically binds the connection string to this store when you test or save it</li>
                 </ol>
                 <p class="my-2">For detailed setup instructions, please refer to our <a href="https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin" target="_blank" rel="noreferrer noopener">documentation</a>.</p>
             </div>
