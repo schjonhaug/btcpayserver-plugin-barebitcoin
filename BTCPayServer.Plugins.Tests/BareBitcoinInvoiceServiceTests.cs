@@ -68,21 +68,20 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task AccountScopes_AreIsolatedAcrossReadsUntrackingAndRestart()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice(Scope, "shared-id");
         await service.TrackInvoice(Scope, "only-a");
-        await service.TrackInvoice(OtherScope, "shared-id");
         await service.TrackInvoice(OtherScope, "only-b");
+        await service.TrackInvoice(OtherScope, "only-a");
 
-        await service.UntrackInvoice(Scope, "shared-id");
+        await service.UntrackInvoice(OtherScope, "only-a");
 
         Assert.Equal(["only-a"], await service.GetTrackedInvoices(Scope));
-        Assert.Equal(["only-b", "shared-id"], (await service.GetTrackedInvoices(OtherScope)).OrderBy(id => id));
+        Assert.Equal(["only-b"], await service.GetTrackedInvoices(OtherScope));
 
         await service.FlushAsync();
         await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
 
         Assert.Equal(["only-a"], await reloaded.GetTrackedInvoices(Scope));
-        Assert.Equal(["only-b", "shared-id"], (await reloaded.GetTrackedInvoices(OtherScope)).OrderBy(id => id));
+        Assert.Equal(["only-b"], await reloaded.GetTrackedInvoices(OtherScope));
     }
 
     [Fact]
@@ -145,6 +144,43 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         persisted = File.ReadAllText(FilePath);
         Assert.Contains("legacy-a", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-b\"]", persisted);
+    }
+
+    [Fact]
+    public async Task ConcurrentLegacyReclamation_AssignsInvoiceToExactlyOneScope()
+    {
+        File.WriteAllText(FilePath, "[\"legacy-a\"]");
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        await Task.WhenAll(
+            service.TrackInvoice(Scope, "legacy-a"),
+            service.TrackInvoice(OtherScope, "legacy-a"));
+
+        var scopeInvoices = await service.GetTrackedInvoices(Scope);
+        var otherScopeInvoices = await service.GetTrackedInvoices(OtherScope);
+        Assert.NotEqual(scopeInvoices.Contains("legacy-a"), otherScopeInvoices.Contains("legacy-a"));
+        Assert.Equal(1, scopeInvoices.Count + otherScopeInvoices.Count);
+
+        await service.FlushAsync();
+        await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        Assert.Equal(scopeInvoices, await reloaded.GetTrackedInvoices(Scope));
+        Assert.Equal(otherScopeInvoices, await reloaded.GetTrackedInvoices(OtherScope));
+    }
+
+    [Fact]
+    public async Task DuplicatePersistedOwnership_IsCanonicalizedToOneScope()
+    {
+        File.WriteAllText(FilePath,
+            "{\"version\":2,\"scopes\":{\"scope-b\":[\"duplicate\"],\"scope-a\":[\"duplicate\"]},\"unassignedLegacyInvoices\":[]}");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        Assert.Equal(["duplicate"], await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+        await service.FlushAsync();
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"scope-a\":[\"duplicate\"]", persisted);
+        Assert.DoesNotContain("\"scope-b\"", persisted);
     }
 
     [Fact]

@@ -139,6 +139,7 @@ public class BareBitcoinListenerTests : IDisposable
         using var cts = new CancellationTokenSource(TestTimeout);
         var notification = await ownerListener.WaitInvoice(cts.Token);
         Assert.Equal("inv-owner", notification.Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-owner");
         Assert.Empty(await invoiceService.GetTrackedInvoices(Scope));
     }
 

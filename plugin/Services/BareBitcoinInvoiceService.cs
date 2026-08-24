@@ -22,6 +22,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 {
     private const int CurrentSchemaVersion = 2;
     private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _invoiceOwners = new(StringComparer.Ordinal);
     private readonly HashSet<string> _unassignedLegacyInvoices = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
@@ -68,6 +69,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
+            if (_invoiceOwners.TryGetValue(invoiceId, out var owningScope) &&
+                !StringComparer.Ordinal.Equals(owningScope, scope.Value))
+            {
+                _logger.LogWarning("Ignored conflicting ownership claim for tracked invoice {InvoiceId}", invoiceId);
+                return;
+            }
+
             if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
             {
                 invoices = new HashSet<string>(StringComparer.Ordinal);
@@ -78,6 +86,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             var reclaimedLegacyInvoice = _unassignedLegacyInvoices.Remove(invoiceId);
             if (scopeChanged || reclaimedLegacyInvoice)
             {
+                _invoiceOwners[invoiceId] = scope.Value;
                 _logger.LogDebug("Added invoice {InvoiceId} to scoped tracking registry (scope now tracks {Count} invoices)",
                     invoiceId, invoices.Count);
                 if (!_dirty)
@@ -102,6 +111,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         {
             if (_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices) && invoices.Remove(invoiceId))
             {
+                _invoiceOwners.Remove(invoiceId);
                 if (invoices.Count == 0)
                     _trackedInvoiceRegistry.Remove(scope.Value);
 
@@ -329,14 +339,20 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
                 throw new JsonSerializationException("Unsupported tracked invoice registry schema");
 
-            foreach (var (scope, invoiceIds) in persisted.Scopes)
+            foreach (var (scope, invoiceIds) in persisted.Scopes.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
                 if (string.IsNullOrWhiteSpace(scope) || invoiceIds is null)
                     continue;
 
-                var validInvoiceIds = invoiceIds
-                    .Where(id => !string.IsNullOrWhiteSpace(id))
-                    .ToHashSet(StringComparer.Ordinal);
+                var validInvoiceIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var invoiceId in invoiceIds.Where(id => !string.IsNullOrWhiteSpace(id)))
+                {
+                    if (_invoiceOwners.TryAdd(invoiceId, scope))
+                        validInvoiceIds.Add(invoiceId);
+                    else if (!StringComparer.Ordinal.Equals(_invoiceOwners[invoiceId], scope))
+                        _dirty = true;
+                }
+
                 if (validInvoiceIds.Count > 0)
                     _trackedInvoiceRegistry[scope] = validInvoiceIds;
             }
@@ -353,6 +369,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             _logger.LogInformation(
                 "Loaded {Count} tracked invoices across {ScopeCount} account scopes and {LegacyCount} quarantined legacy invoices from disk",
                 assignedInvoiceIds.Count, _trackedInvoiceRegistry.Count, _unassignedLegacyInvoices.Count);
+
+            if (_dirty)
+            {
+                _logger.LogWarning("Removed conflicting duplicate invoice ownership while loading persisted tracking state");
+                ScheduleFlush();
+            }
         }
         catch (JsonException ex)
         {
