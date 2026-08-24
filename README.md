@@ -1,5 +1,7 @@
 # Bare Bitcoin Plugin for BTCPay Server
 
+![Bare Bitcoin](bare-bitcoin.svg)
+
 Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server. This plugin allows you to receive Lightning payments directly to your Bare Bitcoin account and view your current balance.
 
 ## Features
