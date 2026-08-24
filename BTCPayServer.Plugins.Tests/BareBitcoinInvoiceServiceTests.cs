@@ -105,6 +105,28 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task UnsupportedSchema_IsPreservedAndTrackingWritesAreDisabled()
+    {
+        const string futureState =
+            "{\"version\":99,\"scopes\":{\"future-scope\":[\"future-invoice\"]},\"futureField\":true}";
+        File.WriteAllText(FilePath, futureState);
+        var logger = new RecordingLogger();
+
+        await using var service = new BareBitcoinInvoiceService(logger, FilePath);
+
+        Assert.Empty(await service.GetTrackedInvoices(Scope));
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.TrackInvoice(Scope, "new-invoice"));
+        await Assert.ThrowsAsync<InvalidDataException>(() => service.UntrackInvoice(Scope, "future-invoice"));
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => service.TryClaimLegacyInvoice(Scope, "future-invoice"));
+        await service.FlushAsync();
+
+        Assert.Equal(futureState, File.ReadAllText(FilePath));
+        Assert.Contains(logger.Entries, entry =>
+            entry.Level == LogLevel.Error && entry.Message.Contains("persistence is disabled"));
+    }
+
+    [Fact]
     public async Task LegacyFlatRegistry_IsQuarantinedAndRewrittenAsScopedState()
     {
         File.WriteAllText(FilePath, "[\"legacy-a\",\"legacy-b\"]");

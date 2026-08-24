@@ -34,6 +34,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private long _snapshotVersion;
     private long _writtenVersion;
     private volatile int _consecutiveFlushFailures;
+    private string? _persistenceDisabledReason;
     private bool _dirty;
     private bool _disposed;
     private Exception? _lastFlushException;
@@ -66,6 +67,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
+        EnsurePersistenceEnabled();
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
@@ -106,6 +108,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
+        EnsurePersistenceEnabled();
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
@@ -135,6 +138,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
+        EnsurePersistenceEnabled();
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
@@ -192,6 +196,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
+        if (_persistenceDisabledReason is not null)
+            return;
+
         try
         {
             if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
@@ -308,6 +315,12 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal int ConsecutiveFlushFailures => _consecutiveFlushFailures;
 
+    private void EnsurePersistenceEnabled()
+    {
+        if (_persistenceDisabledReason is not null)
+            throw new InvalidDataException(_persistenceDisabledReason);
+    }
+
     private void ScheduleFlush() => ScheduleFlush(FlushInterval);
 
     private void ScheduleFlush(TimeSpan delay)
@@ -354,7 +367,15 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
             var persisted = token.ToObject<PersistedRegistry>();
             if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
-                throw new JsonSerializationException("Unsupported tracked invoice registry schema");
+            {
+                _persistenceDisabledReason =
+                    $"Unsupported tracked invoice registry schema version {persisted?.Version.ToString() ?? "unknown"}";
+                _logger.LogError(
+                    "Tracked invoice persistence is disabled because {Path} uses unsupported schema version {Version}; " +
+                    "the file will remain unchanged until it is explicitly migrated",
+                    _dataFilePath, persisted?.Version.ToString() ?? "unknown");
+                return;
+            }
 
             foreach (var (scope, invoiceIds) in persisted.Scopes.OrderBy(entry => entry.Key, StringComparer.Ordinal))
             {
