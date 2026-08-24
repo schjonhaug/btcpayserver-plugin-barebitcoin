@@ -99,7 +99,7 @@ echo "Preparing release $tag from current version $currentVersion"
 
 perl -0pi -e "s:<Version>[^<]+</Version>:<Version>$version</Version>:" "$projectFile"
 
-dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj
+dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release
 
 git add "$projectFile"
 git commit -m "Release $tag"

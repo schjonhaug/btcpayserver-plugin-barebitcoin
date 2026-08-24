@@ -135,6 +135,22 @@ docker run --rm \
 
 The container runs as root so it can write `appsettings.dev.json` on the bind mount. This single-plugin repository uses `plugin/` rather than `Plugins/`; the README setup below writes `appsettings.dev.json` directly.
 
+### Test
+
+Run the test suite through Microsoft Testing Platform:
+
+```shell
+dotnet test BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj
+```
+
+After building, the test executable can also be run directly:
+
+```shell
+./BTCPayServer.Plugins.Tests/bin/Debug/net10.0/BTCPayServer.Plugins.Tests
+```
+
+On Windows, run the executable at the same path with the `.exe` extension.
+
 ### Run Locally
 
 Configure BTCPay Server to load the plugin:
