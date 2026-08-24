@@ -17,7 +17,11 @@
         <ContainerRepository>barebitcoin-config-builder</ContainerRepository>
         <ContainerImageTag>test</ContainerImageTag>
         <ContainerImageFormat>OCI</ContainerImageFormat>
-        <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+        <!--
+          Do not pin a CPU architecture. Publish with os=linux so the SDK
+          selects linux-x64 or linux-arm64 from the host, matching the old
+          Dockerfile's native-arch build.
+        -->
         <!-- Ubuntu 24.04; .NET 10 does not ship Debian runtime images. -->
         <ContainerFamily>noble</ContainerFamily>
         <!--

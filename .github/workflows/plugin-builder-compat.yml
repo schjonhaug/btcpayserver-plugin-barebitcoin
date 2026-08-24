@@ -65,7 +65,7 @@ jobs:
           global-json-file: global.json
 
       - name: Publish ConfigBuilder container
-        run: dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release /t:PublishContainer
+        run: dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release --os linux /t:PublishContainer
 
       - name: Smoke-test ConfigBuilder container
         run: |

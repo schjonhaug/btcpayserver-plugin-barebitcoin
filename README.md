@@ -112,7 +112,7 @@ ConfigBuilder is an optional development helper that writes `DEBUG_PLUGINS` into
 There is no Dockerfile. Publish the image with the .NET 10 SDK:
 
 ```shell
-dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release /t:PublishContainer
+dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release --os linux /t:PublishContainer
 ```
 
 The SDK selects `mcr.microsoft.com/dotnet/runtime:10.0-noble` from `TargetFramework` (`net10.0`) plus `ContainerFamily` (`noble`). That is Ubuntu 24.04, the default Linux distribution for official .NET 10 images. Debian variants are not published for .NET 10.
