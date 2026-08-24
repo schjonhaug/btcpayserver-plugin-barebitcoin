@@ -20,6 +20,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 {
     private readonly ILightningClient _lightningClient;
     private readonly IBareBitcoinInvoiceService _invoiceService;
+    private readonly BareBitcoinInvoiceScope _invoiceScope;
 
     // Channel for communicating paid invoices back to BTCPay Server
     // Uses a bounded channel with a capacity of 100 to prevent memory issues
@@ -61,10 +62,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
     /// </summary>
-    public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int maxPollConcurrency = 10)
-        : this(lightningClient, invoiceService, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
+    public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int maxPollConcurrency = 10)
+        : this(lightningClient, invoiceService, invoiceScope, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, int maxDeliveredCapacity = 10_000, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
+    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, int maxDeliveredCapacity = 10_000, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
@@ -72,6 +73,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
+        _invoiceScope = invoiceScope;
         _logger = logger;
         _maxPollConcurrency = maxPollConcurrency;
         _maxDeliveredCapacity = maxDeliveredCapacity;
@@ -109,7 +111,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
             try
             {
                 // Get the current list of invoices to track
-                var trackedInvoices = await _invoiceService.GetTrackedInvoices(_cts.Token);
+                var trackedInvoices = await _invoiceService.GetTrackedInvoices(_invoiceScope, _cts.Token);
                 _logger.LogDebug("Polling {Count} tracked invoices for updates", trackedInvoices.Count);
                 var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
                 var failureCount = 0;
@@ -259,7 +261,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     {
         try
         {
-            await _invoiceService.UntrackInvoice(invoiceId, _cts.Token);
+            await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, _cts.Token);
             return true;
         }
         catch (IOException ex)
@@ -325,4 +327,4 @@ public class BareBitcoinListener : ILightningInvoiceListener
             throw;
         }
     }
-} 
+}

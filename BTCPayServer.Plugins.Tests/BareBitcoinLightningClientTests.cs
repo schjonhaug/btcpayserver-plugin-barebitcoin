@@ -46,13 +46,14 @@ public class BareBitcoinLightningClientTests
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
         ILogger? logger = null,
-        int maxRetries = 0)
+        int maxRetries = 0,
+        string accountId = "test-account")
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
             privateKey: TestPrivateKey,
             publicKey: "test-public-key",
-            accountId: "test-account",
+            accountId: accountId,
             apiEndpoint: new Uri("https://api.example.com"),
             network: Network.Main,
             httpClient: httpClient,
@@ -228,17 +229,17 @@ public class BareBitcoinLightningClientTests
         Exception? untrackException = null,
         IReadOnlyCollection<string>? trackedInvoices = null) : IBareBitcoinInvoiceService
     {
-        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => trackException is not null
                 ? Task.FromException(trackException)
                 : Task.CompletedTask;
 
-        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => untrackException is not null
                 ? Task.FromException(untrackException)
                 : Task.CompletedTask;
 
-        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
     }
 
@@ -507,6 +508,29 @@ public class BareBitcoinLightningClientTests
         Assert.Equal(2, result.Length);
         Assert.Contains(result, i => i.Id == "inv-ok");
         Assert.Contains(result, i => i.Id == "inv-ok2");
+    }
+
+    [Fact]
+    public async Task ListInvoices_ReturnsOnlyInvoicesOwnedByClientsAccount()
+    {
+        var invoiceService = new ScopedInMemoryInvoiceService();
+        var accountA = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+            invoiceService,
+            accountId: "account-a");
+        var accountB = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+            invoiceService,
+            accountId: "account-b");
+
+        await accountA.GetInvoice("inv-a");
+        await accountB.GetInvoice("inv-b");
+
+        var invoicesA = await accountA.ListInvoices(new ListInvoicesParams());
+        var invoicesB = await accountB.ListInvoices(new ListInvoicesParams());
+
+        Assert.Equal(["inv-a"], invoicesA.Select(invoice => invoice.Id));
+        Assert.Equal(["inv-b"], invoicesB.Select(invoice => invoice.Id));
     }
 
     [Fact]
@@ -1039,20 +1063,61 @@ public class BareBitcoinLightningClientTests
 
     private sealed class MutableInvoiceService(HashSet<string> tracked) : IBareBitcoinInvoiceService
     {
-        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             tracked.Add(invoiceId);
             return Task.CompletedTask;
         }
 
-        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             tracked.Remove(invoiceId);
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(new HashSet<string>(tracked));
+    }
+
+    private sealed class ScopedInMemoryInvoiceService : IBareBitcoinInvoiceService
+    {
+        private readonly Dictionary<BareBitcoinInvoiceScope, HashSet<string>> _tracked = new();
+        private readonly object _lock = new();
+
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                if (!_tracked.TryGetValue(scope, out var invoices))
+                {
+                    invoices = new HashSet<string>();
+                    _tracked.Add(scope, invoices);
+                }
+                invoices.Add(invoiceId);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                if (_tracked.TryGetValue(scope, out var invoices))
+                    invoices.Remove(invoiceId);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                IReadOnlyCollection<string> invoices = _tracked.TryGetValue(scope, out var tracked)
+                    ? new HashSet<string>(tracked)
+                    : Array.Empty<string>();
+                return Task.FromResult(invoices);
+            }
+        }
     }
 
     private sealed class CapturingLogger : ILogger

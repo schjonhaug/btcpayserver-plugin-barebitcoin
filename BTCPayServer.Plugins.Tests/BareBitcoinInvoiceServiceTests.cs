@@ -14,6 +14,8 @@ namespace BTCPayServer.Plugins.Tests;
 
 public class BareBitcoinInvoiceServiceTests : IDisposable
 {
+    private static readonly BareBitcoinInvoiceScope Scope = new("scope-a");
+    private static readonly BareBitcoinInvoiceScope OtherScope = new("scope-b");
     private readonly string _tempDir;
 
     public BareBitcoinInvoiceServiceTests()
@@ -34,12 +36,12 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task TrackedInvoices_SurviveRestart()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice("inv-1");
-        await service.TrackInvoice("inv-2");
+        await service.TrackInvoice(Scope, "inv-1");
+        await service.TrackInvoice(Scope, "inv-2");
         await service.FlushAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
 
         Assert.Contains("inv-1", tracked);
         Assert.Contains("inv-2", tracked);
@@ -50,23 +52,44 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task UntrackInvoice_RemovesFromFile()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice("inv-1");
-        await service.TrackInvoice("inv-2");
-        await service.UntrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
+        await service.TrackInvoice(Scope, "inv-2");
+        await service.UntrackInvoice(Scope, "inv-1");
         await service.FlushAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
 
         Assert.DoesNotContain("inv-1", tracked);
         Assert.Contains("inv-2", tracked);
     }
 
     [Fact]
+    public async Task AccountScopes_AreIsolatedAcrossReadsUntrackingAndRestart()
+    {
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await service.TrackInvoice(Scope, "shared-id");
+        await service.TrackInvoice(Scope, "only-a");
+        await service.TrackInvoice(OtherScope, "shared-id");
+        await service.TrackInvoice(OtherScope, "only-b");
+
+        await service.UntrackInvoice(Scope, "shared-id");
+
+        Assert.Equal(["only-a"], await service.GetTrackedInvoices(Scope));
+        Assert.Equal(["only-b", "shared-id"], (await service.GetTrackedInvoices(OtherScope)).OrderBy(id => id));
+
+        await service.FlushAsync();
+        await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        Assert.Equal(["only-a"], await reloaded.GetTrackedInvoices(Scope));
+        Assert.Equal(["only-b", "shared-id"], (await reloaded.GetTrackedInvoices(OtherScope)).OrderBy(id => id));
+    }
+
+    [Fact]
     public async Task MissingFile_StartsEmpty()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service.GetTrackedInvoices();
+        var tracked = await service.GetTrackedInvoices(Scope);
 
         Assert.Empty(tracked);
     }
@@ -77,19 +100,48 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         File.WriteAllText(FilePath, "not valid json {{{");
 
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service.GetTrackedInvoices();
+        var tracked = await service.GetTrackedInvoices(Scope);
 
         Assert.Empty(tracked);
+    }
+
+    [Fact]
+    public async Task LegacyFlatRegistry_IsDiscardedAndRewrittenAsScopedState()
+    {
+        File.WriteAllText(FilePath, "[\"legacy-a\",\"legacy-b\"]");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        Assert.Empty(await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+
+        await service.FlushAsync();
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"version\":2", persisted);
+        Assert.DoesNotContain("legacy-a", persisted);
+        Assert.DoesNotContain("legacy-b", persisted);
+    }
+
+    [Fact]
+    public void AccountScope_IsStableAndSeparatesAccountEndpointAndNetwork()
+    {
+        var endpoint = new Uri("https://api.example.com/");
+        var scope = BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, "account-a");
+
+        Assert.Equal(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, " account-a "));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, "account-b"));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(new Uri("https://other.example.com"), NBitcoin.Network.Main, "account-a"));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.TestNet, "account-a"));
     }
 
     [Fact]
     public async Task TrackInvoice_IsDeduplicated()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice("inv-1");
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
-        var tracked = await service.GetTrackedInvoices();
+        var tracked = await service.GetTrackedInvoices(Scope);
         Assert.Single(tracked);
     }
 
@@ -97,13 +149,13 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task DirtyState_FlushedOnDispose()
     {
         var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // Dispose without waiting for flush timer — should flush
         await service.DisposeAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
 
         Assert.Contains("inv-1", tracked);
     }
@@ -112,7 +164,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task FlushAsync_PersistsImmediately()
     {
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
         await service.FlushAsync();
 
         Assert.True(File.Exists(FilePath));
@@ -125,7 +177,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
         await service.FlushAsync();
 
         Assert.NotNull(service.LastFlushException);
@@ -138,7 +190,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath, failCount: 1);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         await service.FlushAsync(); // fails
         Assert.NotNull(service.LastFlushException);
@@ -152,7 +204,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         var service = new FailingSaveService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         await service.DisposeAsync();
 
@@ -168,7 +220,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         var service = new FailingSaveService(logger, FilePath, failCount: 1);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         await service.DisposeAsync();
 
@@ -187,7 +239,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath, writer);
 
         for (var i = 0; i < 20; i++)
-            await service.TrackInvoice($"inv-{i}");
+            await service.TrackInvoice(Scope, $"inv-{i}");
 
         // Start first flush — it will block inside WriteAsync
         var flush1 = service.FlushAsync();
@@ -195,9 +247,9 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         // Mutate state while first flush is blocked in I/O
         for (var i = 20; i < 30; i++)
-            await service.TrackInvoice($"inv-{i}");
+            await service.TrackInvoice(Scope, $"inv-{i}");
         for (var i = 10; i < 15; i++)
-            await service.UntrackInvoice($"inv-{i}");
+            await service.UntrackInvoice(Scope, $"inv-{i}");
 
         // Release first flush and let it complete
         writer.Release();
@@ -207,7 +259,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.FlushAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
 
         // inv-0..9 tracked, inv-10..14 untracked, inv-15..29 tracked
         for (var i = 0; i < 10; i++)
@@ -226,7 +278,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath, writer);
 
         for (var i = 0; i < 10; i++)
-            await service.TrackInvoice($"inv-{i}");
+            await service.TrackInvoice(Scope, $"inv-{i}");
 
         // Launch multiple concurrent flushes — only one should actually write
         var tasks = new Task[10];
@@ -239,7 +291,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         // Data integrity check
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
         Assert.Equal(10, tracked.Count);
     }
 
@@ -248,7 +300,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var writer = new FailOnceWriter(new FileDiskWriter(FilePath));
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath, writer);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // First flush fails due to simulated I/O error
         await service.FlushAsync();
@@ -258,7 +310,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.FlushAsync();
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
         Assert.Contains("inv-1", tracked);
     }
 
@@ -269,7 +321,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath, writer);
 
         for (var i = 0; i < 10; i++)
-            await service.TrackInvoice($"inv-{i}");
+            await service.TrackInvoice(Scope, $"inv-{i}");
 
         // Start flush — it will block inside WriteAsync
         var flushTask = service.FlushAsync();
@@ -284,7 +336,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await disposeTask;
 
         await using var service2 = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-        var tracked = await service2.GetTrackedInvoices();
+        var tracked = await service2.GetTrackedInvoices(Scope);
 
         for (var i = 0; i < 10; i++)
             Assert.Contains($"inv-{i}", tracked);
@@ -296,7 +348,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         Assert.Equal(0, service.ConsecutiveFlushFailures);
 
@@ -315,7 +367,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath, failCount: 2);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // Build up failures
         await service.FlushAsync();
@@ -332,7 +384,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // After 1st failure → exponent 0 → 1s
         await service.FlushAsync();
@@ -366,7 +418,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         var writer = new SignalingFailWriter();
         await using var service = new BareBitcoinInvoiceService(logger, FilePath, writer);
 
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // Wait for the timer callback to complete logging after the disk failure
         var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
@@ -376,11 +428,11 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
             e.Level == LogLevel.Error && e.Message.Contains("Failed to flush tracked invoices to disk"));
 
         // Service remains stable — in-memory state is intact
-        var tracked = await service.GetTrackedInvoices();
+        var tracked = await service.GetTrackedInvoices(Scope);
         Assert.Contains("inv-1", tracked);
 
-        await service.TrackInvoice("inv-2");
-        tracked = await service.GetTrackedInvoices();
+        await service.TrackInvoice(Scope, "inv-2");
+        tracked = await service.GetTrackedInvoices(Scope);
         Assert.Equal(2, tracked.Count);
     }
 
@@ -392,7 +444,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service = new BareBitcoinInvoiceService(logger, FilePath, writer);
         try
         {
-            await service.TrackInvoice("inv-1");
+            await service.TrackInvoice(Scope, "inv-1");
 
             // Wait for the timer callback's defense-in-depth catch to log the error
             var logged = await Task.WhenAny(logger.ExpectedLogEmitted, Task.Delay(TimeSpan.FromSeconds(5)));
@@ -402,11 +454,11 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
                 e.Level == LogLevel.Error && e.Message.Contains("Unhandled exception in flush timer callback"));
 
             // Service remains stable
-            var tracked = await service.GetTrackedInvoices();
+            var tracked = await service.GetTrackedInvoices(Scope);
             Assert.Contains("inv-1", tracked);
 
-            await service.TrackInvoice("inv-2");
-            tracked = await service.GetTrackedInvoices();
+            await service.TrackInvoice(Scope, "inv-2");
+            tracked = await service.GetTrackedInvoices(Scope);
             Assert.Equal(2, tracked.Count);
         }
         finally
@@ -421,7 +473,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSaveService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         // Flush many times — log throttle should suppress most messages
         for (var i = 0; i < 10; i++)
@@ -439,7 +491,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSerializeService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         await service.FlushAsync();
         Assert.Equal(1, service.ConsecutiveFlushFailures);
@@ -457,7 +509,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSerializeService(logger, FilePath, failCount: 2);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         await service.FlushAsync();
         await service.FlushAsync();
@@ -477,7 +529,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     {
         var logger = new RecordingLogger();
         await using var service = new FailingSerializeService(logger, FilePath);
-        await service.TrackInvoice("inv-1");
+        await service.TrackInvoice(Scope, "inv-1");
 
         for (var i = 0; i < 10; i++)
             await service.FlushAsync();

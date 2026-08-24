@@ -2,23 +2,26 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
-/// Singleton service that maintains the central registry of invoices that need to be tracked for payment status.
-/// This service acts as the source of truth for which invoices should be monitored across all listener instances.
+/// Singleton service that maintains account-isolated registries of invoices that need to be tracked for payment status.
+/// Each client and listener can only access invoices through its owning Bare Bitcoin account scope.
 /// Provides thread-safe operations for adding, removing, and querying tracked invoices.
 /// Tracked invoices are persisted to disk so they survive server restarts.
 /// Disk writes are batched to avoid excessive I/O under high invoice throughput.
 /// </summary>
 public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
-    private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
+    private const int CurrentSchemaVersion = 2;
+    private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
@@ -59,15 +62,21 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// Adds an invoice to the central tracking registry.
     /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
-    public async Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+    public async Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            if (_trackedInvoiceRegistry.Add(invoiceId))
+            if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
             {
-                _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
-                    invoiceId, _trackedInvoiceRegistry.Count);
+                invoices = new HashSet<string>(StringComparer.Ordinal);
+                _trackedInvoiceRegistry.Add(scope.Value, invoices);
+            }
+
+            if (invoices.Add(invoiceId))
+            {
+                _logger.LogDebug("Added invoice {InvoiceId} to scoped tracking registry (scope now tracks {Count} invoices)",
+                    invoiceId, invoices.Count);
                 if (!_dirty)
                     ScheduleFlush();
                 _dirty = true;
@@ -83,15 +92,18 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// Removes an invoice from the central tracking registry.
     /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
-    public async Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+    public async Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            if (_trackedInvoiceRegistry.Remove(invoiceId))
+            if (_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices) && invoices.Remove(invoiceId))
             {
-                _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
-                    invoiceId, _trackedInvoiceRegistry.Count);
+                if (invoices.Count == 0)
+                    _trackedInvoiceRegistry.Remove(scope.Value);
+
+                _logger.LogDebug("Removed invoice {InvoiceId} from scoped tracking registry (scope now tracks {Count} invoices)",
+                    invoiceId, invoices.Count);
                 if (!_dirty)
                     ScheduleFlush();
                 _dirty = true;
@@ -106,12 +118,14 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// <summary>
     /// Returns a copy of the current tracking registry.
     /// </summary>
-    public async Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+    public async Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            return new HashSet<string>(_trackedInvoiceRegistry);
+            return _trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices)
+                ? new HashSet<string>(invoices, StringComparer.Ordinal)
+                : Array.Empty<string>();
         }
         finally
         {
@@ -269,16 +283,36 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 return;
             }
 
-            var invoiceIds = JsonConvert.DeserializeObject<string[]>(json);
-            if (invoiceIds != null)
+            var token = JToken.Parse(json);
+            if (token.Type == JTokenType.Array)
             {
-                foreach (var id in invoiceIds)
-                {
-                    if (!string.IsNullOrWhiteSpace(id))
-                        _trackedInvoiceRegistry.Add(id);
-                }
-                _logger.LogInformation("Loaded {Count} tracked invoices from disk", _trackedInvoiceRegistry.Count);
+                var legacyCount = token.Values<string>().Count(id => !string.IsNullOrWhiteSpace(id));
+                _logger.LogWarning(
+                    "Discarding {Count} legacy tracked invoices because the persisted state has no account ownership information",
+                    legacyCount);
+                _dirty = true;
+                ScheduleFlush();
+                return;
             }
+
+            var persisted = token.ToObject<PersistedRegistry>();
+            if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
+                throw new JsonSerializationException("Unsupported tracked invoice registry schema");
+
+            foreach (var (scope, invoiceIds) in persisted.Scopes)
+            {
+                if (string.IsNullOrWhiteSpace(scope) || invoiceIds is null)
+                    continue;
+
+                var validInvoiceIds = invoiceIds
+                    .Where(id => !string.IsNullOrWhiteSpace(id))
+                    .ToHashSet(StringComparer.Ordinal);
+                if (validInvoiceIds.Count > 0)
+                    _trackedInvoiceRegistry[scope] = validInvoiceIds;
+            }
+
+            _logger.LogInformation("Loaded {Count} tracked invoices across {ScopeCount} account scopes from disk",
+                _trackedInvoiceRegistry.Values.Sum(invoices => invoices.Count), _trackedInvoiceRegistry.Count);
         }
         catch (JsonException ex)
         {
@@ -292,11 +326,30 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal virtual string SerializeRegistry()
     {
-        return JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+        var scopes = _trackedInvoiceRegistry
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+                StringComparer.Ordinal);
+        return JsonConvert.SerializeObject(new PersistedRegistry
+        {
+            Version = CurrentSchemaVersion,
+            Scopes = scopes
+        });
     }
 
     internal virtual async Task SaveToDiskAsync(string json)
     {
         await _diskWriter.WriteAsync(json);
+    }
+
+    private sealed class PersistedRegistry
+    {
+        [JsonProperty("version")]
+        public int Version { get; init; }
+
+        [JsonProperty("scopes")]
+        public Dictionary<string, string[]>? Scopes { get; init; }
     }
 }
