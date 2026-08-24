@@ -80,6 +80,73 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task OwningStoreStartupPoll_ReclaimsUnpaidLegacyInvoiceIntoItsScope()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-invoice\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-invoice");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Unpaid, invoice.Status);
+            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            Assert.Equal(["legacy-invoice"], await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
+
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task OwningStoreStartupPoll_ReturnsPaidLegacyInvoiceForImmediateRecording()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-paid\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-paid");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+            Assert.NotNull(invoice.PaidAt);
+            Assert.NotNull(invoice.AmountReceived);
+            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            Assert.Empty(await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task GetInvoice_ReturnsInvoice_WhenUntrackInvoiceThrowsIOException()
     {
         var invoiceService = new ThrowingInvoiceService(

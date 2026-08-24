@@ -294,7 +294,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
                 _logger.LogWarning(
                     "Quarantined {Count} legacy tracked invoices because the persisted state has no account ownership information; " +
-                    "they will remain persisted but unavailable to scoped clients until reclaimed by a scoped access",
+                    "they will remain persisted and unavailable to scoped listeners until BTCPay's owning-store startup reconciliation reclaims or resolves them",
                     _unassignedLegacyInvoices.Count);
                 _dirty = true;
                 ScheduleFlush();
