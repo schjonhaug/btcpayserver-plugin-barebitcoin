@@ -24,6 +24,13 @@ public class BareBitcoinLightningClientTests
     private const string TestBolt11 =
         "lnbc1pvjluezpp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdpl2pkx2ctnv5sxxmmwwd5kgetjypeh2ursdae8g6twvus8g6rfwvs8qun0dfjkxaq8rkx3yf5tcsyz3d73gafnh3cax9rn449d9p5uxz9ezhhypd0elx87sjle52x86fux2ypatgddc6k63n7erqz25le42c4u4ecky03ylcqca784w";
 
+    // 0.0025 BTC with an explicit 60-second expiry.
+    private const string ValidCreateBolt11 =
+        "lnbc2500u1pvjluezsp5zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zyg3zygspp5qqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqqqsyqcyq5rqwzqfqypqdq5xysxxatsyp3k7enxv4jsxqzpu9qrsgquk0rl77nj30yxdy8j9vdx85fkpmdla2087ne0xh8nhedh8w27kyke0lp53ut353s06fv3qfegext0eh0ymjpf39tuven09sam30g4vgpfna3rh";
+
+    private static readonly TimeProvider ValidCreateTimeProvider = new FixedTimeProvider(
+        BOLT11PaymentRequest.Parse(ValidCreateBolt11, Network.Main).Timestamp);
+
     // Valid Base64 key required by BareBitcoinApiService.CreateHmac
     private const string TestPrivateKey = "dGVzdC1wcml2YXRlLWtleS1mb3ItaG1hYw==";
 
@@ -38,7 +45,7 @@ public class BareBitcoinLightningClientTests
     private static string CreateInvoiceApiJson() => $$"""
         {
             "depositDestinationId": "dep-1",
-            "invoice": "{{TestBolt11}}"
+            "invoice": "{{ValidCreateBolt11}}"
         }
         """;
 
@@ -47,7 +54,8 @@ public class BareBitcoinLightningClientTests
         IBareBitcoinInvoiceService invoiceService,
         ILogger? logger = null,
         int maxRetries = 0,
-        string accountId = "test-account")
+        string accountId = "test-account",
+        TimeProvider? timeProvider = null)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
@@ -59,7 +67,8 @@ public class BareBitcoinLightningClientTests
             httpClient: httpClient,
             logger: logger ?? NullLogger.Instance,
             invoiceService: invoiceService,
-            maxRetries: maxRetries);
+            maxRetries: maxRetries,
+            timeProvider: timeProvider);
     }
 
     [Fact]
@@ -214,15 +223,15 @@ public class BareBitcoinLightningClientTests
             trackException: new IOException("disk full"));
 
         var handler = new FakeMessageHandler(CreateInvoiceApiJson());
-        var client = CreateClient(handler, invoiceService);
+        var client = CreateClient(handler, invoiceService, timeProvider: ValidCreateTimeProvider);
 
         var result = await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
         Assert.NotNull(result);
-        Assert.Equal("dep-1", result.Id);
+        Assert.Equal(ValidCreateBolt11, result.Id);
         Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
-        Assert.Equal(TestBolt11, result.BOLT11);
+        Assert.Equal(ValidCreateBolt11, result.BOLT11);
     }
 
     [Fact]
@@ -239,15 +248,16 @@ public class BareBitcoinLightningClientTests
             var client = CreateClient(
                 new FakeMessageHandler(CreateInvoiceApiJson()),
                 invoiceService,
-                accountId: "owner-account");
+                accountId: "owner-account",
+                timeProvider: ValidCreateTimeProvider);
 
             var result = await client.CreateInvoice(
-                new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+                new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
-            Assert.Equal("dep-1", result.Id);
+            Assert.Equal(ValidCreateBolt11, result.Id);
             var ownerScope = BareBitcoinInvoiceScope.ForAccount(
                 new Uri("https://api.example.com"), Network.Main, "owner-account");
-            Assert.Equal(["dep-1"], await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Equal([ValidCreateBolt11], await invoiceService.GetTrackedInvoices(ownerScope));
 
             await invoiceService.FlushAsync();
             Assert.Equal(futureState, await File.ReadAllTextAsync(filePath));
@@ -278,10 +288,10 @@ public class BareBitcoinLightningClientTests
     {
         var invoiceService = new ThrowingInvoiceService();
         var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
-        var client = CreateClient(handler, invoiceService);
+        var client = CreateClient(handler, invoiceService, timeProvider: ValidCreateTimeProvider);
 
         await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
         var request = Assert.Single(handler.Requests);
         Assert.True(request.Headers.Contains("x-bb-api-key"));
@@ -294,10 +304,14 @@ public class BareBitcoinLightningClientTests
     {
         var invoiceService = new ScopedInMemoryInvoiceService();
         var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
-        var client = CreateClient(handler, invoiceService, accountId: "  account-a  ");
+        var client = CreateClient(
+            handler,
+            invoiceService,
+            accountId: "  account-a  ",
+            timeProvider: ValidCreateTimeProvider);
 
         await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
         var requestBody = Assert.Single(handler.RequestBodies);
         Assert.Equal("account-a", Newtonsoft.Json.Linq.JObject.Parse(requestBody).Value<string>("accountId"));
@@ -305,7 +319,7 @@ public class BareBitcoinLightningClientTests
 
         var normalizedScope = BareBitcoinInvoiceScope.ForAccount(
             new Uri("https://api.example.com"), Network.Main, "account-a");
-        Assert.Equal(["dep-1"], await invoiceService.GetTrackedInvoices(normalizedScope));
+        Assert.Equal([ValidCreateBolt11], await invoiceService.GetTrackedInvoices(normalizedScope));
     }
 
     [Fact]
@@ -315,11 +329,11 @@ public class BareBitcoinLightningClientTests
             trackException: new OperationCanceledException("token cancelled"));
 
         var handler = new FakeMessageHandler(CreateInvoiceApiJson());
-        var client = CreateClient(handler, invoiceService);
+        var client = CreateClient(handler, invoiceService, timeProvider: ValidCreateTimeProvider);
 
         await Assert.ThrowsAsync<OperationCanceledException>(
             () => client.CreateInvoice(
-                new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1))));
+                new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1))));
     }
 
     [Fact]
@@ -364,13 +378,17 @@ public class BareBitcoinLightningClientTests
             trackException: new IOException("disk full"));
 
         var handler = new FakeMessageHandler(CreateInvoiceApiJson());
-        var client = CreateClient(handler, invoiceService, logger);
+        var client = CreateClient(
+            handler,
+            invoiceService,
+            logger,
+            timeProvider: ValidCreateTimeProvider);
 
         await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
         var warning = Assert.Single(logger.Entries, e => e.LogLevel == LogLevel.Warning);
-        Assert.Contains("dep-1", warning.Message);
+        Assert.Contains(ValidCreateBolt11, warning.Message);
         Assert.IsType<IOException>(warning.Exception);
     }
 
@@ -752,6 +770,28 @@ public class BareBitcoinLightningClientTests
                 Content = new StringContent(
                     invoiceId == "inv-bad-bolt11" ? malformedBolt11Json : ApiJson("INVOICE_STATUS_UNPAID"),
                     Encoding.UTF8, "application/json")
+            }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-ok", result[0].Id);
+    }
+
+    [Fact]
+    public async Task ListInvoices_SkipsInvoiceWithMismatchedPaymentHash()
+    {
+        const string mismatchedPaymentHash =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", mismatchedPaymentHash });
+
+        var handler = new PerInvoiceHandler(_ =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
             }));
 
         var client = CreateClient(handler, invoiceService);
@@ -1299,5 +1339,10 @@ public class BareBitcoinLightningClientTests
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
 
         public record LogEntry(LogLevel LogLevel, string Message, Exception? Exception);
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }

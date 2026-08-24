@@ -37,89 +37,133 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
-    public async Task CreateInvoice_AmountlessBolt11ReturnsRequestedAmount()
+    public async Task CreateInvoice_AmountlessBolt11ForFixedAmountFailsWithoutTracking()
     {
         var invoiceService = new RecordingInvoiceService();
         var client = CreateClient(
             new StaticResponseHandler(CreateResponse("amountless-id", AmountlessBolt11)),
-            invoiceService);
+            invoiceService,
+            timeProvider: AtInvoiceTimestamp(AmountlessBolt11));
         var requestedAmount = LightMoney.Satoshis(1_234);
 
-        var invoice = await client.CreateInvoice(
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
             new CreateInvoiceParams(requestedAmount, "amountless", TimeSpan.FromMinutes(5)),
-            TestContext.Current.CancellationToken);
+            TestContext.Current.CancellationToken));
 
-        Assert.Equal(requestedAmount, invoice.Amount);
-        Assert.Equal(AmountlessBolt11, invoice.BOLT11);
+        Assert.Contains("amount", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
     }
 
     [Fact]
-    public async Task CreateInvoice_DifferentBolt11AmountStillReturnsRequestedAmount()
+    public async Task CreateInvoice_DifferentBolt11AmountFailsWithoutTracking()
     {
         var invoiceService = new RecordingInvoiceService();
         var client = CreateClient(
             new StaticResponseHandler(CreateResponse("different-amount-id", AmountBearingBolt11)),
-            invoiceService);
+            invoiceService,
+            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
         var requestedAmount = LightMoney.Satoshis(9_999);
 
-        var invoice = await client.CreateInvoice(
-            new CreateInvoiceParams(requestedAmount, "different amount", TimeSpan.FromMinutes(5)),
-            TestContext.Current.CancellationToken);
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(requestedAmount, "different amount", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken));
 
-        Assert.NotEqual(Parse(AmountBearingBolt11).MinimumAmount, requestedAmount);
-        Assert.Equal(requestedAmount, invoice.Amount);
-        Assert.Equal(AmountBearingBolt11, invoice.BOLT11);
-    }
-
-    [Fact]
-    public async Task CreateInvoice_LongerProviderLifetimeExposesBolt11Expiry()
-    {
-        var invoiceService = new RecordingInvoiceService();
-        var client = CreateClient(
-            new StaticResponseHandler(CreateResponse("long-expiry-id", AmountlessBolt11)),
-            invoiceService);
-
-        var invoice = await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(500), "expiry", TimeSpan.FromMinutes(1)),
-            TestContext.Current.CancellationToken);
-
-        Assert.Equal(Parse(AmountlessBolt11).ExpiryDate, invoice.ExpiresAt);
-        Assert.Equal(TimeSpan.FromHours(1), EncodedLifetime(invoice.BOLT11));
+        Assert.Contains("amount", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
     }
 
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public async Task CreateInvoice_AbsentOrNullProviderIdFallsBackToPaymentHash(bool includeNullId)
+    [InlineData(10)]
+    [InlineData(300)]
+    public async Task CreateInvoice_IncompatibleProviderExpiryFailsWithoutTracking(int requestedExpirySeconds)
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(CreateResponse("expiry-id", AmountBearingBolt11)),
+            invoiceService,
+            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(
+                LightMoney.Satoshis(250_000),
+                "expiry",
+                TimeSpan.FromSeconds(requestedExpirySeconds)),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("monitoring deadline", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("unsupported-id")]
+    public async Task CreateInvoice_UsesBolt11AsDocumentedLookupIdentifier(string? providerId)
     {
         const string accountId = "fallback-owner";
         var invoiceService = new RecordingInvoiceService();
         var response = new JObject { ["invoice"] = AmountlessBolt11 };
-        if (includeNullId)
-            response["depositDestinationId"] = JValue.CreateNull();
+        if (providerId is not null)
+            response["depositDestinationId"] = providerId;
 
         var client = CreateClient(
             new StaticResponseHandler(response.ToString(Formatting.None)),
             invoiceService,
-            accountId);
+            accountId,
+            AtInvoiceTimestamp(AmountlessBolt11));
         var paymentHash = Parse(AmountlessBolt11).PaymentHash!.ToString();
 
         var invoice = await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Satoshis(700), "fallback", TimeSpan.FromMinutes(5)),
+            new CreateInvoiceParams(LightMoney.Zero, "fallback", TimeSpan.FromHours(1)),
             TestContext.Current.CancellationToken);
 
         var scope = Scope(accountId);
-        Assert.Equal(paymentHash, invoice.Id);
+        Assert.Equal(AmountlessBolt11, invoice.Id);
         Assert.Equal(paymentHash, invoice.PaymentHash);
-        Assert.Equal([paymentHash], await invoiceService.GetTrackedInvoices(
+        Assert.Equal([AmountlessBolt11], await invoiceService.GetTrackedInvoices(
             scope, TestContext.Current.CancellationToken));
-        Assert.Equal(new ScopedInvoiceCall(scope, paymentHash), Assert.Single(invoiceService.TrackCalls));
+        Assert.Equal(new ScopedInvoiceCall(scope, AmountlessBolt11), Assert.Single(invoiceService.TrackCalls));
+    }
+
+    [Fact]
+    public async Task CreateInvoice_AlreadyExpiredBolt11FailsWithoutTracking()
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(CreateResponse("expired-id", AmountBearingBolt11)),
+            invoiceService,
+            timeProvider: new FixedTimeProvider(Parse(AmountBearingBolt11).ExpiryDate));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "expired", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("expired", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_AmountBearingBolt11ForTopUpFailsWithoutTracking()
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(CreateResponse("fixed-id", AmountBearingBolt11)),
+            invoiceService,
+            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("amount-bearing", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
     }
 
     [Theory]
-    [InlineData("{}", typeof(Exception))]
-    [InlineData("{\"invoice\":null}", typeof(Exception))]
-    [InlineData("{\"invoice\":\"\"}", typeof(Exception))]
+    [InlineData("{}", typeof(InvalidOperationException))]
+    [InlineData("{\"invoice\":null}", typeof(InvalidOperationException))]
+    [InlineData("{\"invoice\":\"\"}", typeof(InvalidOperationException))]
     [InlineData("not valid json {{{", typeof(JsonReaderException))]
     [InlineData("{\"depositDestinationId\":\"bad-id\",\"invoice\":\"not-a-bolt11\"}", typeof(FormatException))]
     public async Task CreateInvoice_InvalidProviderResponseFailsWithoutTracking(
@@ -193,6 +237,26 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
+    public async Task GetInvoice_DifferentPaymentHashFailsWithoutTrackingSideEffects()
+    {
+        const string trackedPaymentHash =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(AmountBearingBolt11, "INVOICE_STATUS_PAID")),
+            invoiceService);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetInvoice(
+            trackedPaymentHash,
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("different invoice", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
+        Assert.Empty(invoiceService.UntrackCalls);
+        Assert.Empty(invoiceService.ClaimCalls);
+    }
+
+    [Fact]
     public async Task GetInvoice_PaidWithoutPreimageFallsBackToPaymentHashAndStaysTracked()
     {
         const string invoiceId = "paid-id";
@@ -258,36 +322,46 @@ public class BareBitcoinInvoiceLifecycleTests
         const string accountB = "account-b";
         const string invoiceAId = "invoice-a";
         const string invoiceBId = "invoice-b";
+        var invoiceABolt11 = AmountBearingBolt11;
+        var invoiceBBolt11 = AmountBearingBolt11.ToUpperInvariant();
         var scopeA = Scope(accountA);
         var scopeB = Scope(accountB);
-        var providerA = new LifecycleProviderHandler(invoiceAId, AmountlessBolt11);
-        var providerB = new LifecycleProviderHandler(invoiceBId, AmountBearingBolt11);
+        var providerA = new LifecycleProviderHandler(invoiceAId, invoiceABolt11);
+        var providerB = new LifecycleProviderHandler(invoiceBId, invoiceBBolt11);
         var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
 
         try
         {
             await using (var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath))
             {
-                var clientA = CreateClient(providerA, invoiceService, accountA);
-                var clientB = CreateClient(providerB, invoiceService, accountB);
+                var clientA = CreateClient(
+                    providerA,
+                    invoiceService,
+                    accountA,
+                    AtInvoiceTimestamp(invoiceABolt11));
+                var clientB = CreateClient(
+                    providerB,
+                    invoiceService,
+                    accountB,
+                    AtInvoiceTimestamp(invoiceBBolt11));
 
                 var created = await Task.WhenAll(
                     clientA.CreateInvoice(
-                        new CreateInvoiceParams(LightMoney.Satoshis(1_000), "A", TimeSpan.FromMinutes(5)),
+                        new CreateInvoiceParams(LightMoney.Satoshis(250_000), "A", TimeSpan.FromMinutes(1)),
                         TestContext.Current.CancellationToken),
                     clientB.CreateInvoice(
-                        new CreateInvoiceParams(LightMoney.Satoshis(2_000), "B", TimeSpan.FromMinutes(5)),
+                        new CreateInvoiceParams(LightMoney.Satoshis(250_000), "B", TimeSpan.FromMinutes(1)),
                         TestContext.Current.CancellationToken));
 
-                Assert.Equal(invoiceAId, created[0].Id);
-                Assert.Equal(invoiceBId, created[1].Id);
+                Assert.Equal(invoiceABolt11, created[0].Id);
+                Assert.Equal(invoiceBBolt11, created[1].Id);
                 await invoiceService.FlushAsync();
             }
 
             await using var reloadedService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
-            Assert.Equal([invoiceAId], await reloadedService.GetTrackedInvoices(
+            Assert.Equal([invoiceABolt11], await reloadedService.GetTrackedInvoices(
                 scopeA, TestContext.Current.CancellationToken));
-            Assert.Equal([invoiceBId], await reloadedService.GetTrackedInvoices(
+            Assert.Equal([invoiceBBolt11], await reloadedService.GetTrackedInvoices(
                 scopeB, TestContext.Current.CancellationToken));
 
             var restartedClientA = CreateClient(providerA, reloadedService, accountA);
@@ -306,14 +380,14 @@ public class BareBitcoinInvoiceLifecycleTests
                     listeners[0].WaitInvoice(timeout.Token),
                     listeners[1].WaitInvoice(timeout.Token));
 
-                Assert.Equal(invoiceAId, delivered[0].Id);
-                Assert.Equal(AmountlessBolt11, delivered[0].BOLT11);
-                Assert.Equal(invoiceBId, delivered[1].Id);
-                Assert.Equal(AmountBearingBolt11, delivered[1].BOLT11);
+                Assert.Equal(invoiceABolt11, delivered[0].Id);
+                Assert.Equal(invoiceABolt11, delivered[0].BOLT11);
+                Assert.Equal(invoiceBBolt11, delivered[1].Id);
+                Assert.Equal(invoiceBBolt11, delivered[1].BOLT11);
                 Assert.NotEmpty(providerA.QueriedInvoiceIds);
                 Assert.NotEmpty(providerB.QueriedInvoiceIds);
-                Assert.All(providerA.QueriedInvoiceIds, id => Assert.Equal(invoiceAId, id));
-                Assert.All(providerB.QueriedInvoiceIds, id => Assert.Equal(invoiceBId, id));
+                Assert.All(providerA.QueriedInvoiceIds, id => Assert.Equal(invoiceABolt11, id));
+                Assert.All(providerB.QueriedInvoiceIds, id => Assert.Equal(invoiceBBolt11, id));
 
                 await WaitUntilAsync(async () =>
                         (await reloadedService.GetTrackedInvoices(scopeA, timeout.Token)).Count == 0 &&
@@ -337,7 +411,8 @@ public class BareBitcoinInvoiceLifecycleTests
     private static BareBitcoinLightningClient CreateClient(
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
-        string accountId = "test-account")
+        string accountId = "test-account",
+        TimeProvider? timeProvider = null)
     {
         var httpClient = new HttpClient(handler, disposeHandler: false) { BaseAddress = ApiEndpoint };
         return new BareBitcoinLightningClient(
@@ -349,7 +424,8 @@ public class BareBitcoinInvoiceLifecycleTests
             httpClient,
             NullLogger.Instance,
             invoiceService,
-            maxRetries: 0);
+            maxRetries: 0,
+            timeProvider: timeProvider);
     }
 
     private static BOLT11PaymentRequest Parse(string bolt11) =>
@@ -360,6 +436,9 @@ public class BareBitcoinInvoiceLifecycleTests
         var parsed = Parse(bolt11);
         return parsed.ExpiryDate - parsed.Timestamp;
     }
+
+    private static TimeProvider AtInvoiceTimestamp(string bolt11) =>
+        new FixedTimeProvider(Parse(bolt11).Timestamp);
 
     private static BareBitcoinInvoiceScope Scope(string accountId) =>
         BareBitcoinInvoiceScope.ForAccount(ApiEndpoint, Network.Main, accountId);
@@ -432,7 +511,7 @@ public class BareBitcoinInvoiceLifecycleTests
                 .Split('/', StringSplitOptions.RemoveEmptyEntries);
             var requestedInvoiceId = pathSegments.LastOrDefault() ?? string.Empty;
             _queriedInvoiceIds.Enqueue(requestedInvoiceId);
-            if (!StringComparer.Ordinal.Equals(invoiceId, requestedInvoiceId))
+            if (!StringComparer.Ordinal.Equals(bolt11, requestedInvoiceId))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
 
             return Task.FromResult(JsonResponse(GetResponse(
@@ -510,5 +589,10 @@ public class BareBitcoinInvoiceLifecycleTests
             _untrackCalls.Clear();
             _claimCalls.Clear();
         }
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => utcNow;
     }
 }
