@@ -119,6 +119,30 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     }
 
     /// <summary>
+    /// Removes a terminal invoice from the legacy quarantine after BTCPay has
+    /// reconciled it through the owning store's scoped connection. This never
+    /// reads or removes invoices assigned to any account scope.
+    /// </summary>
+    public async Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+    {
+        await _invoiceTrackingLock.WaitAsync(cancellation);
+        try
+        {
+            if (_unassignedLegacyInvoices.Remove(invoiceId))
+            {
+                _logger.LogDebug("Resolved invoice {InvoiceId} from the legacy quarantine", invoiceId);
+                if (!_dirty)
+                    ScheduleFlush();
+                _dirty = true;
+            }
+        }
+        finally
+        {
+            _invoiceTrackingLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Returns a copy of the current tracking registry.
     /// </summary>
     public async Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)

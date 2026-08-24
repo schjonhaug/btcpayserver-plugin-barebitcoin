@@ -139,6 +139,36 @@ public class BareBitcoinLightningClientTests
                 new Uri("https://api.example.com"), Network.Main, "foreign-account");
             Assert.Empty(await invoiceService.GetTrackedInvoices(ownerScope));
             Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
+
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task OwningStoreStartupPoll_ClearsExpiredLegacyInvoiceFromQuarantine()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-expired\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_EXPIRED")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-expired");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Expired, invoice.Status);
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
         }
         finally
         {
@@ -305,6 +335,9 @@ public class BareBitcoinLightningClientTests
             => untrackException is not null
                 ? Task.FromException(untrackException)
                 : Task.CompletedTask;
+
+        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.CompletedTask;
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
@@ -1142,6 +1175,9 @@ public class BareBitcoinLightningClientTests
             return Task.CompletedTask;
         }
 
+        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.CompletedTask;
+
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(new HashSet<string>(tracked));
     }
@@ -1174,6 +1210,9 @@ public class BareBitcoinLightningClientTests
             }
             return Task.CompletedTask;
         }
+
+        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.CompletedTask;
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
         {

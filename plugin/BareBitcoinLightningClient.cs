@@ -206,15 +206,17 @@ public class BareBitcoinLightningClient : ILightningClient
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
             }
         }
-        else if (status == LightningInvoiceStatus.Expired)
+        else
         {
             try
             {
-                await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, cancellation);
+                if (status == LightningInvoiceStatus.Expired)
+                    await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, cancellation);
+                await _invoiceService.ResolveLegacyInvoice(_invoiceScope, invoiceId, cancellation);
             }
             catch (IOException ex)
             {
-                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist terminal tracking cleanup for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
             }
         }
 

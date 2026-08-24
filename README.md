@@ -15,7 +15,7 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 Plugin versions that used the legacy flat tracked-invoice file did not persist which Bare Bitcoin account owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.
 
-BTCPay Server independently persists each monitored Lightning invoice with its owning store and connection. During startup reconciliation, BTCPay calls `GetInvoice` through that store's connection rather than through the plugin's legacy registry. An unpaid invoice is then atomically reclaimed into the correct account scope; a paid invoice is returned directly to BTCPay for payment recording. This restores monitoring without assigning a legacy ID to the first or every Bare Bitcoin connection.
+BTCPay Server independently persists each monitored Lightning invoice with its owning store and connection. During startup reconciliation, BTCPay calls `GetInvoice` through that store's connection rather than through the plugin's legacy registry. An unpaid invoice is then atomically reclaimed into the correct account scope; a paid invoice is returned directly to BTCPay for payment recording. Paid and expired invoices are removed from quarantine after that successful terminal lookup. This restores monitoring without assigning a legacy ID to the first or every Bare Bitcoin connection.
 
 ## Installation
 
