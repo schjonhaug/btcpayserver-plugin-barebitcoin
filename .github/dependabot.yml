@@ -7,10 +7,6 @@ updates:
       - "/plugin"
     schedule:
       interval: "weekly"
-  - package-ecosystem: "docker"
-    directory: "/ConfigBuilder"
-    schedule:
-      interval: "weekly"
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
