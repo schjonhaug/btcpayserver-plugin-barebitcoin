@@ -264,7 +264,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
             await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, _cts.Token);
             return true;
         }
-        catch (Exception ex) when (ex is IOException or InvalidDataException)
+        catch (IOException ex)
         {
             _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
             return false;

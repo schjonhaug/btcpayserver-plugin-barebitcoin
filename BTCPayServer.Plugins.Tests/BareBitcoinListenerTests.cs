@@ -673,41 +673,6 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
-    public async Task UntrackInvoice_InvalidDataException_ExpiredInvoice_ContinuesProcessing()
-    {
-        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
-        await realService.TrackInvoice(Scope, "inv-expired");
-        await realService.TrackInvoice(Scope, "inv-ok");
-
-        var faultyService = new FaultyUntrackInvoiceService(
-            realService,
-            faultyInvoiceId: "inv-expired",
-            exception: new InvalidDataException("unsupported registry schema"));
-
-        var client = new FakeLightningClient((invoiceId, _) =>
-        {
-            if (invoiceId == "inv-expired")
-                return Task.FromResult<LightningInvoice?>(new LightningInvoice
-                {
-                    Id = invoiceId,
-                    Status = LightningInvoiceStatus.Expired,
-                    Amount = LightMoney.Satoshis(1000),
-                    PaymentHash = invoiceId
-                });
-            return Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId));
-        });
-
-        using var listener = new BareBitcoinListener(client, faultyService, Scope, NullLogger.Instance, channelCapacity: 10);
-        using var cts = new CancellationTokenSource(TestTimeout);
-
-        var result = await listener.WaitInvoice(cts.Token);
-        Assert.Equal("inv-ok", result.Id);
-
-        var remaining = await realService.GetTrackedInvoices(Scope);
-        Assert.Contains("inv-expired", remaining);
-    }
-
-    [Fact]
     public async Task PaidInvoice_NotDeliveredTwice_WhenUntrackFails()
     {
         await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
@@ -826,13 +791,10 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     /// <summary>
-    /// Wraps a real IBareBitcoinInvoiceService, throwing a persistence exception from
-    /// UntrackInvoice for a specific invoice ID.
+    /// Wraps a real IBareBitcoinInvoiceService, throwing IOException from UntrackInvoice
+    /// for a specific invoice ID to simulate disk failures.
     /// </summary>
-    private sealed class FaultyUntrackInvoiceService(
-        IBareBitcoinInvoiceService inner,
-        string faultyInvoiceId,
-        Exception? exception = null) : IBareBitcoinInvoiceService
+    private sealed class FaultyUntrackInvoiceService(IBareBitcoinInvoiceService inner, string faultyInvoiceId) : IBareBitcoinInvoiceService
     {
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => inner.TrackInvoice(scope, invoiceId, cancellation);
@@ -840,7 +802,7 @@ public class BareBitcoinListenerTests : IDisposable
         public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             if (invoiceId == faultyInvoiceId)
-                throw exception ?? new IOException("Simulated disk failure");
+                throw new IOException("Simulated disk failure");
             return inner.UntrackInvoice(scope, invoiceId, cancellation);
         }
 

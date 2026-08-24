@@ -202,7 +202,7 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            catch (IOException ex)
             {
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
             }
@@ -215,7 +215,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 if (status == LightningInvoiceStatus.Expired)
                     await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            catch (IOException ex)
             {
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist terminal tracking cleanup for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
             }
@@ -449,7 +449,7 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException)
+            catch (IOException ex)
             {
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for newly created invoice {InvoiceId}, will retry on next access", invoiceId);
             }

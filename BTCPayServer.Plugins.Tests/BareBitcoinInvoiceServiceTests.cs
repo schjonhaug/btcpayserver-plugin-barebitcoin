@@ -105,7 +105,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task UnsupportedSchema_IsPreservedAndTrackingWritesAreDisabled()
+    public async Task UnsupportedSchema_IsPreservedWhileNewInvoicesAreTrackedInMemory()
     {
         const string futureState =
             "{\"version\":99,\"scopes\":{\"future-scope\":[\"future-invoice\"]},\"futureField\":true}";
@@ -115,15 +115,20 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await using var service = new BareBitcoinInvoiceService(logger, FilePath);
 
         Assert.Empty(await service.GetTrackedInvoices(Scope));
-        await Assert.ThrowsAsync<InvalidDataException>(() => service.TrackInvoice(Scope, "new-invoice"));
-        await Assert.ThrowsAsync<InvalidDataException>(() => service.UntrackInvoice(Scope, "future-invoice"));
-        await Assert.ThrowsAsync<InvalidDataException>(
-            () => service.TryClaimLegacyInvoice(Scope, "future-invoice"));
+        await service.TrackInvoice(Scope, "new-invoice");
+        await service.TrackInvoice(OtherScope, "new-invoice");
+        Assert.Equal(["new-invoice"], await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+
+        await service.UntrackInvoice(OtherScope, "new-invoice");
+        Assert.Equal(["new-invoice"], await service.GetTrackedInvoices(Scope));
         await service.FlushAsync();
 
         Assert.Equal(futureState, File.ReadAllText(FilePath));
         Assert.Contains(logger.Entries, entry =>
-            entry.Level == LogLevel.Error && entry.Message.Contains("persistence is disabled"));
+            entry.Level == LogLevel.Error &&
+            entry.Message.Contains("persistence is disabled") &&
+            entry.Message.Contains("tracked in memory"));
     }
 
     [Fact]
