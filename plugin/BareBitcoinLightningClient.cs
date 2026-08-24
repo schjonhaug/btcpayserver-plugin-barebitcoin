@@ -30,6 +30,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly BareBitcoinInvoiceScope _invoiceScope;
+    private readonly TimeProvider _timeProvider;
     private readonly int _maxPollConcurrency;
     private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
@@ -39,7 +40,9 @@ public class BareBitcoinLightningClient : ILightningClient
     private ILightningInvoiceListener? _currentListener;
     private readonly SemaphoreSlim _listenerLock = new SemaphoreSlim(1, 1);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3)
+    internal static readonly TimeSpan InvoiceExpiryTolerance = TimeSpan.FromSeconds(30);
+
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         _privateKey = privateKey;
@@ -51,6 +54,7 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger = logger;
         _invoiceService = invoiceService;
         _invoiceScope = BareBitcoinInvoiceScope.ForAccount(apiEndpoint, network, _accountId);
+        _timeProvider = timeProvider ?? TimeProvider.System;
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
         if (maxRetries is < 0 or > 10) throw new ArgumentOutOfRangeException(nameof(maxRetries));
@@ -172,7 +176,8 @@ public class BareBitcoinLightningClient : ILightningClient
             _ => LightningInvoiceStatus.Unpaid // Default case
         };
 
-        var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+        var bolt11 = ParseProviderInvoice(invoice);
+        ValidateLookupBinding(invoiceId, bolt11);
         var amount = bolt11.MinimumAmount;
         var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
         var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
@@ -418,6 +423,7 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
+            var requestedExpiryDate = _timeProvider.GetUtcNow() + createInvoiceRequest.Expiry;
             var requestData = new
             {
                 accountId = _accountId,
@@ -434,14 +440,18 @@ public class BareBitcoinLightningClient : ILightningClient
             );
             
             var responseObj = JObject.Parse(response);
-            var depositDestinationId = responseObj["depositDestinationId"]?.Value<string>();
             var invoice = responseObj["invoice"]?.Value<string>();
 
-            if (string.IsNullOrEmpty(invoice))
-                throw new Exception("No invoice returned from BareBitcoin API");
+            if (string.IsNullOrWhiteSpace(invoice))
+                throw new InvalidOperationException("Bare Bitcoin returned no BOLT11 invoice");
 
-            var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
-            var invoiceId = depositDestinationId ?? bolt11.PaymentHash?.ToString() ?? string.Empty;
+            var bolt11 = ParseProviderInvoice(invoice);
+            ValidateCreatedInvoice(createInvoiceRequest, bolt11, requestedExpiryDate);
+
+            // The lookup API explicitly supports the complete BOLT11. Using it
+            // as the identifier also preserves the expected payment hash, so
+            // subsequent provider responses can be bound to this invoice.
+            var invoiceId = invoice;
 
             // Best-effort persist: the API already created the invoice, so a
             // disk error must not prevent returning it to the caller.
@@ -459,7 +469,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 Id = invoiceId,
                 BOLT11 = invoice,
                 Status = LightningInvoiceStatus.Unpaid,
-                Amount = createInvoiceRequest.Amount,
+                Amount = bolt11.MinimumAmount,
                 ExpiresAt = bolt11.ExpiryDate,
                 PaymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty,
                 PaidAt = null
@@ -469,6 +479,61 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             Logger.LogError(ex, "Error creating invoice with BareBitcoin");
             throw;
+        }
+    }
+
+    private BOLT11PaymentRequest ParseProviderInvoice(string invoice)
+    {
+        var bolt11 = BOLT11PaymentRequest.Parse(invoice, _network);
+        if (!bolt11.VerifySignature())
+            throw new InvalidOperationException("Bare Bitcoin returned a BOLT11 with an invalid signature");
+        if (bolt11.PaymentHash is null)
+            throw new InvalidOperationException("Bare Bitcoin returned a BOLT11 without a payment hash");
+        return bolt11;
+    }
+
+    private void ValidateCreatedInvoice(
+        CreateInvoiceParams request,
+        BOLT11PaymentRequest bolt11,
+        DateTimeOffset requestedExpiryDate)
+    {
+        var returnedAmount = bolt11.MinimumAmount;
+        if (request.Amount == LightMoney.Zero)
+        {
+            if (returnedAmount != LightMoney.Zero)
+                throw new InvalidOperationException(
+                    $"Bare Bitcoin returned an amount-bearing BOLT11 for an amountless request ({returnedAmount})");
+        }
+        else if (returnedAmount == LightMoney.Zero || returnedAmount != request.Amount)
+        {
+            throw new InvalidOperationException(
+                $"Bare Bitcoin returned a BOLT11 amount of {returnedAmount}, expected {request.Amount}");
+        }
+
+        var now = _timeProvider.GetUtcNow();
+        if (bolt11.ExpiryDate <= now)
+            throw new InvalidOperationException("Bare Bitcoin returned an already expired BOLT11");
+
+        var expiryDifference = (bolt11.ExpiryDate - requestedExpiryDate).Duration();
+        if (expiryDifference > InvoiceExpiryTolerance)
+        {
+            throw new InvalidOperationException(
+                $"Bare Bitcoin returned a BOLT11 expiring at {bolt11.ExpiryDate:O}, outside the requested monitoring deadline {requestedExpiryDate:O}");
+        }
+    }
+
+    private void ValidateLookupBinding(string invoiceId, BOLT11PaymentRequest returnedBolt11)
+    {
+        uint256? expectedPaymentHash = null;
+        if (BOLT11PaymentRequest.TryParse(invoiceId, out var trackedBolt11, _network))
+            expectedPaymentHash = trackedBolt11?.PaymentHash;
+        else if (uint256.TryParse(invoiceId, out var trackedPaymentHash))
+            expectedPaymentHash = trackedPaymentHash;
+
+        if (expectedPaymentHash is not null && expectedPaymentHash != returnedBolt11.PaymentHash)
+        {
+            throw new InvalidOperationException(
+                $"Bare Bitcoin returned a different invoice for tracked identifier {invoiceId}");
         }
     }
 
