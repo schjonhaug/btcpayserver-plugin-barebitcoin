@@ -781,6 +781,28 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task ListInvoices_SkipsInvoiceWithMismatchedPaymentHash()
+    {
+        const string mismatchedPaymentHash =
+            "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+        var invoiceService = new ThrowingInvoiceService(
+            trackedInvoices: new[] { "inv-ok", mismatchedPaymentHash });
+
+        var handler = new PerInvoiceHandler(_ =>
+            Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(ApiJson("INVOICE_STATUS_UNPAID"), Encoding.UTF8, "application/json")
+            }));
+
+        var client = CreateClient(handler, invoiceService);
+
+        var result = await client.ListInvoices(new ListInvoicesParams());
+
+        Assert.Single(result);
+        Assert.Equal("inv-ok", result[0].Id);
+    }
+
+    [Fact]
     public async Task ListInvoices_PropagatesUnauthorizedHttpException()
     {
         var invoiceService = new ThrowingInvoiceService(
