@@ -32,6 +32,8 @@ namespace BTCPayServer.Plugins.BareBitcoin
                 return new BareBitcoinInvoiceService(logger, filePath);
             });
             applicationBuilder.AddSingleton<IBareBitcoinInvoiceService>(provider => provider.GetRequiredService<BareBitcoinInvoiceService>());
+            applicationBuilder.AddSingleton<IBareBitcoinStoreBinding, BareBitcoinStoreBinding>();
+            applicationBuilder.AddSingleton<IBareBitcoinStoreContext, BareBitcoinStoreContext>();
             applicationBuilder.AddSingleton<ILightningConnectionStringHandler>(provider => provider.GetRequiredService<BareBitcoinLightningConnectionStringHandler>());
             applicationBuilder.AddSingleton<BareBitcoinLightningConnectionStringHandler>();
             applicationBuilder.AddSingleton<ISwaggerProvider, BareBitcoinSwaggerProvider>();

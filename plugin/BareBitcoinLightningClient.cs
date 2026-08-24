@@ -23,6 +23,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly string _privateKey;
     private readonly string _publicKey;
     private readonly string _accountId; 
+    private readonly string _storeId;
     private readonly Uri _apiEndpoint;
     private readonly HttpClient _httpClient;
     private readonly Network _network;
@@ -42,18 +43,20 @@ public class BareBitcoinLightningClient : ILightningClient
 
     internal static readonly TimeSpan InvoiceExpiryTolerance = TimeSpan.FromSeconds(30);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, string storeId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeId);
         _privateKey = privateKey;
         _publicKey = publicKey;
         _accountId = accountId.Trim();
+        _storeId = storeId.Trim();
         _apiEndpoint = apiEndpoint;
         _network = network;
         _httpClient = httpClient;
         Logger = logger;
         _invoiceService = invoiceService;
-        _invoiceScope = BareBitcoinInvoiceScope.ForAccount(apiEndpoint, network, _accountId);
+        _invoiceScope = BareBitcoinInvoiceScope.ForStoreConnection(apiEndpoint, network, _accountId, _storeId);
         _timeProvider = timeProvider ?? TimeProvider.System;
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
@@ -67,7 +70,7 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public override string ToString()
     {
-        return $"type=barebitcoin;server={_apiEndpoint};public-key={_publicKey};account-id={_accountId}";
+        return $"type=barebitcoin;server={_apiEndpoint};public-key={_publicKey};account-id={_accountId};store-id={_storeId}";
     }
 
     public async Task<LightningInvoice?> GetInvoice(string invoiceId,

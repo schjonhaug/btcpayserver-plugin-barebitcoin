@@ -14,12 +14,21 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILoggerFactory _loggerFactory;
     private readonly IBareBitcoinInvoiceService _invoiceService;
+    private readonly IBareBitcoinStoreBinding _storeBinding;
+    private readonly IBareBitcoinStoreContext _storeContext;
 
-    public BareBitcoinLightningConnectionStringHandler(IHttpClientFactory httpClientFactory, ILoggerFactory loggerFactory, IBareBitcoinInvoiceService invoiceService)
+    public BareBitcoinLightningConnectionStringHandler(
+        IHttpClientFactory httpClientFactory,
+        ILoggerFactory loggerFactory,
+        IBareBitcoinInvoiceService invoiceService,
+        IBareBitcoinStoreBinding storeBinding,
+        IBareBitcoinStoreContext storeContext)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
         _invoiceService = invoiceService;
+        _storeBinding = storeBinding;
+        _storeContext = storeContext;
     }
 
 
@@ -73,6 +82,33 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             return null;
         }
 
+        if (!kv.TryGetValue("store-id", out var storeId))
+        {
+            error = "The key 'store-id' is not found. Open this store's Lightning setup and save the connection again";
+            return null;
+        }
+
+        if (string.IsNullOrWhiteSpace(storeId))
+        {
+            error = "The key 'store-id' must not be empty";
+            return null;
+        }
+
+        if (!kv.TryGetValue("store-binding", out var protectedStoreId) ||
+            !_storeBinding.IsValid(storeId, protectedStoreId))
+        {
+            error = "The key 'store-binding' is missing or does not authenticate this BTCPay store. Open this store's Lightning setup and save the connection again";
+            return null;
+        }
+
+        var authenticatedStoreId = _storeContext.GetCurrentStoreId();
+        if (authenticatedStoreId is not null &&
+            !StringComparer.Ordinal.Equals(authenticatedStoreId, storeId.Trim()))
+        {
+            error = "The authenticated BTCPay store does not match this Bare Bitcoin connection's store binding";
+            return null;
+        }
+
         var maxPollConcurrency = 10;
         if (kv.TryGetValue("max-poll-concurrency", out var maxPollConcurrencyStr))
         {
@@ -91,7 +127,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
       
 
         try

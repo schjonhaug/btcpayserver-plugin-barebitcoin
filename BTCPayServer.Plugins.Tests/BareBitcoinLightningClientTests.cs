@@ -55,6 +55,7 @@ public class BareBitcoinLightningClientTests
         ILogger? logger = null,
         int maxRetries = 0,
         string accountId = "test-account",
+        string storeId = "test-store",
         TimeProvider? timeProvider = null)
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
@@ -62,6 +63,7 @@ public class BareBitcoinLightningClientTests
             privateKey: TestPrivateKey,
             publicKey: "test-public-key",
             accountId: accountId,
+            storeId: storeId,
             apiEndpoint: new Uri("https://api.example.com"),
             network: Network.Main,
             httpClient: httpClient,
@@ -106,10 +108,10 @@ public class BareBitcoinLightningClientTests
 
             Assert.NotNull(invoice);
             Assert.Equal(LightningInvoiceStatus.Unpaid, invoice.Status);
-            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
-                new Uri("https://api.example.com"), Network.Main, "owner-account");
-            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
-                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            var ownerScope = BareBitcoinInvoiceScope.ForStoreConnection(
+                new Uri("https://api.example.com"), Network.Main, "owner-account", "test-store");
+            var foreignScope = BareBitcoinInvoiceScope.ForStoreConnection(
+                new Uri("https://api.example.com"), Network.Main, "owner-account", "foreign-store");
             Assert.Equal(["legacy-invoice"], await invoiceService.GetTrackedInvoices(ownerScope));
             Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
 
@@ -142,10 +144,10 @@ public class BareBitcoinLightningClientTests
             Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
             Assert.NotNull(invoice.PaidAt);
             Assert.NotNull(invoice.AmountReceived);
-            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
-                new Uri("https://api.example.com"), Network.Main, "owner-account");
-            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
-                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            var ownerScope = BareBitcoinInvoiceScope.ForStoreConnection(
+                new Uri("https://api.example.com"), Network.Main, "owner-account", "test-store");
+            var foreignScope = BareBitcoinInvoiceScope.ForStoreConnection(
+                new Uri("https://api.example.com"), Network.Main, "owner-account", "foreign-store");
             Assert.Equal(["legacy-paid"], await invoiceService.GetTrackedInvoices(ownerScope));
             Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
 
@@ -255,8 +257,8 @@ public class BareBitcoinLightningClientTests
                 new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)));
 
             Assert.Equal(ValidCreateBolt11, result.Id);
-            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
-                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            var ownerScope = BareBitcoinInvoiceScope.ForStoreConnection(
+                new Uri("https://api.example.com"), Network.Main, "owner-account", "test-store");
             Assert.Equal([ValidCreateBolt11], await invoiceService.GetTrackedInvoices(ownerScope));
 
             await invoiceService.FlushAsync();
@@ -317,8 +319,9 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("account-a", Newtonsoft.Json.Linq.JObject.Parse(requestBody).Value<string>("accountId"));
         Assert.Contains("account-id=account-a", client.ToString());
 
-        var normalizedScope = BareBitcoinInvoiceScope.ForAccount(
-            new Uri("https://api.example.com"), Network.Main, "account-a");
+        Assert.Contains("store-id=test-store", client.ToString());
+        var normalizedScope = BareBitcoinInvoiceScope.ForStoreConnection(
+            new Uri("https://api.example.com"), Network.Main, "account-a", "test-store");
         Assert.Equal([ValidCreateBolt11], await invoiceService.GetTrackedInvoices(normalizedScope));
     }
 
@@ -687,23 +690,25 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
-    public async Task ListInvoices_ReturnsOnlyInvoicesOwnedByClientsAccount()
+    public async Task ListInvoices_ReturnsOnlyInvoicesOwnedByStoreConnectionWithSharedProviderAccount()
     {
         var invoiceService = new ScopedInMemoryInvoiceService();
-        var accountA = CreateClient(
+        var storeA = CreateClient(
             new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
             invoiceService,
-            accountId: "account-a");
-        var accountB = CreateClient(
+            accountId: "shared-account",
+            storeId: "store-a");
+        var storeB = CreateClient(
             new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
             invoiceService,
-            accountId: "account-b");
+            accountId: "shared-account",
+            storeId: "store-b");
 
-        await accountA.GetInvoice("inv-a");
-        await accountB.GetInvoice("inv-b");
+        await storeA.GetInvoice("inv-a");
+        await storeB.GetInvoice("inv-b");
 
-        var invoicesA = await accountA.ListInvoices(new ListInvoicesParams());
-        var invoicesB = await accountB.ListInvoices(new ListInvoicesParams());
+        var invoicesA = await storeA.ListInvoices(new ListInvoicesParams());
+        var invoicesB = await storeB.ListInvoices(new ListInvoicesParams());
 
         Assert.Equal(["inv-a"], invoicesA.Select(invoice => invoice.Id));
         Assert.Equal(["inv-b"], invoicesB.Select(invoice => invoice.Id));

@@ -143,7 +143,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         await service.FlushAsync();
         var persisted = File.ReadAllText(FilePath);
-        Assert.Contains("\"version\":2", persisted);
+        Assert.Contains("\"version\":3", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-a\",\"legacy-b\"]", persisted);
 
         await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
@@ -171,6 +171,45 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         persisted = File.ReadAllText(FilePath);
         Assert.Contains("legacy-a", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-b\"]", persisted);
+    }
+
+    [Fact]
+    public async Task AccountScopedVersion2Registry_IsQuarantinedForStoreScopedReconciliation()
+    {
+        File.WriteAllText(FilePath,
+            "{\"version\":2,\"scopes\":{\"old-account-scope-a\":[\"invoice-a\",\"shared\"],\"old-account-scope-b\":[\"invoice-b\",\"shared\"]},\"unassignedLegacyInvoices\":[\"legacy\"]}");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        Assert.Empty(await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+
+        await service.FlushAsync();
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"scopes\":{}", persisted);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"invoice-a\",\"invoice-b\",\"legacy\",\"shared\"]", persisted);
+
+        Assert.True(await service.TryClaimLegacyInvoice(Scope, "invoice-a"));
+        Assert.False(await service.TryClaimLegacyInvoice(OtherScope, "invoice-a"));
+        Assert.Equal(["invoice-a"], await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+    }
+
+    [Fact]
+    public async Task AccountScopedVersion2Registry_WithNullScopes_MigratesItsLegacyQuarantine()
+    {
+        File.WriteAllText(FilePath,
+            "{\"version\":2,\"scopes\":null,\"unassignedLegacyInvoices\":[\"legacy\"]}");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await service.FlushAsync();
+
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"scopes\":{}", persisted);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy\"]", persisted);
+        Assert.True(await service.TryClaimLegacyInvoice(Scope, "legacy"));
     }
 
     [Fact]
@@ -215,7 +254,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task DuplicatePersistedOwnership_IsCanonicalizedToOneScope()
     {
         File.WriteAllText(FilePath,
-            "{\"version\":2,\"scopes\":{\"scope-b\":[\"duplicate\"],\"scope-a\":[\"duplicate\"]},\"unassignedLegacyInvoices\":[]}");
+            "{\"version\":3,\"scopes\":{\"scope-b\":[\"duplicate\"],\"scope-a\":[\"duplicate\"]},\"unassignedLegacyInvoices\":[]}");
 
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
 
@@ -231,7 +270,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     public async Task ScopedState_DoesNotReloadAssignedInvoiceAsQuarantined()
     {
         File.WriteAllText(FilePath,
-            "{\"version\":2,\"scopes\":{\"scope-a\":[\"shared\"]},\"unassignedLegacyInvoices\":[\"shared\",\"legacy\"]}");
+            "{\"version\":3,\"scopes\":{\"scope-a\":[\"shared\"]},\"unassignedLegacyInvoices\":[\"shared\",\"legacy\"]}");
 
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
         Assert.Equal(["shared"], await service.GetTrackedInvoices(Scope));
@@ -245,15 +284,22 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public void AccountScope_IsStableAndSeparatesAccountEndpointAndNetwork()
+    public void StoreConnectionScope_IsStableAndSeparatesStoreAccountEndpointAndNetwork()
     {
         var endpoint = new Uri("https://api.example.com/");
-        var scope = BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, "account-a");
+        var scope = BareBitcoinInvoiceScope.ForStoreConnection(
+            endpoint, NBitcoin.Network.Main, "account-a", "store-a");
 
-        Assert.Equal(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, " account-a "));
-        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.Main, "account-b"));
-        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(new Uri("https://other.example.com"), NBitcoin.Network.Main, "account-a"));
-        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForAccount(endpoint, NBitcoin.Network.TestNet, "account-a"));
+        Assert.Equal(scope, BareBitcoinInvoiceScope.ForStoreConnection(
+            endpoint, NBitcoin.Network.Main, " account-a ", " store-a "));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForStoreConnection(
+            endpoint, NBitcoin.Network.Main, "account-a", "store-b"));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForStoreConnection(
+            endpoint, NBitcoin.Network.Main, "account-b", "store-a"));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForStoreConnection(
+            new Uri("https://other.example.com"), NBitcoin.Network.Main, "account-a", "store-a"));
+        Assert.NotEqual(scope, BareBitcoinInvoiceScope.ForStoreConnection(
+            endpoint, NBitcoin.Network.TestNet, "account-a", "store-a"));
     }
 
     [Fact]

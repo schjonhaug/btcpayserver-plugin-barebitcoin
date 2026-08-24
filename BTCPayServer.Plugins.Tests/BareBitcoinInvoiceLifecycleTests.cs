@@ -318,14 +318,15 @@ public class BareBitcoinInvoiceLifecycleTests
     [Fact]
     public async Task TwoConnections_ReloadAndDeliverOnlyTheirOwnPaidInvoices()
     {
-        const string accountA = "account-a";
-        const string accountB = "account-b";
+        const string sharedAccount = "shared-account";
+        const string storeA = "store-a";
+        const string storeB = "store-b";
         const string invoiceAId = "invoice-a";
         const string invoiceBId = "invoice-b";
         var invoiceABolt11 = AmountBearingBolt11;
         var invoiceBBolt11 = AmountBearingBolt11.ToUpperInvariant();
-        var scopeA = Scope(accountA);
-        var scopeB = Scope(accountB);
+        var scopeA = Scope(sharedAccount, storeA);
+        var scopeB = Scope(sharedAccount, storeB);
         var providerA = new LifecycleProviderHandler(invoiceAId, invoiceABolt11);
         var providerB = new LifecycleProviderHandler(invoiceBId, invoiceBBolt11);
         var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
@@ -337,13 +338,15 @@ public class BareBitcoinInvoiceLifecycleTests
                 var clientA = CreateClient(
                     providerA,
                     invoiceService,
-                    accountA,
-                    AtInvoiceTimestamp(invoiceABolt11));
+                    sharedAccount,
+                    AtInvoiceTimestamp(invoiceABolt11),
+                    storeA);
                 var clientB = CreateClient(
                     providerB,
                     invoiceService,
-                    accountB,
-                    AtInvoiceTimestamp(invoiceBBolt11));
+                    sharedAccount,
+                    AtInvoiceTimestamp(invoiceBBolt11),
+                    storeB);
 
                 var created = await Task.WhenAll(
                     clientA.CreateInvoice(
@@ -364,8 +367,8 @@ public class BareBitcoinInvoiceLifecycleTests
             Assert.Equal([invoiceBBolt11], await reloadedService.GetTrackedInvoices(
                 scopeB, TestContext.Current.CancellationToken));
 
-            var restartedClientA = CreateClient(providerA, reloadedService, accountA);
-            var restartedClientB = CreateClient(providerB, reloadedService, accountB);
+            var restartedClientA = CreateClient(providerA, reloadedService, sharedAccount, storeId: storeA);
+            var restartedClientB = CreateClient(providerB, reloadedService, sharedAccount, storeId: storeB);
             var listeners = await StartListenersConcurrently(
                 restartedClientA.Listen(TestContext.Current.CancellationToken),
                 restartedClientB.Listen(TestContext.Current.CancellationToken));
@@ -412,13 +415,15 @@ public class BareBitcoinInvoiceLifecycleTests
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
         string accountId = "test-account",
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        string storeId = "test-store")
     {
         var httpClient = new HttpClient(handler, disposeHandler: false) { BaseAddress = ApiEndpoint };
         return new BareBitcoinLightningClient(
             TestPrivateKey,
             "test-public-key-" + accountId,
             accountId,
+            storeId,
             ApiEndpoint,
             Network.Main,
             httpClient,
@@ -440,8 +445,8 @@ public class BareBitcoinInvoiceLifecycleTests
     private static TimeProvider AtInvoiceTimestamp(string bolt11) =>
         new FixedTimeProvider(Parse(bolt11).Timestamp);
 
-    private static BareBitcoinInvoiceScope Scope(string accountId) =>
-        BareBitcoinInvoiceScope.ForAccount(ApiEndpoint, Network.Main, accountId);
+    private static BareBitcoinInvoiceScope Scope(string accountId, string storeId = "test-store") =>
+        BareBitcoinInvoiceScope.ForStoreConnection(ApiEndpoint, Network.Main, accountId, storeId);
 
     private static string CreateResponse(string? invoiceId, string bolt11)
     {
