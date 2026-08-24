@@ -29,6 +29,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinApiService _apiService;
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly IBareBitcoinInvoiceService _invoiceService;
+    private readonly BareBitcoinInvoiceScope _invoiceScope;
     private readonly int _maxPollConcurrency;
     private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
@@ -40,14 +41,16 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         _privateKey = privateKey;
         _publicKey = publicKey;
-        _accountId = accountId;
+        _accountId = accountId.Trim();
         _apiEndpoint = apiEndpoint;
         _network = network;
         _httpClient = httpClient;
         Logger = logger;
         _invoiceService = invoiceService;
+        _invoiceScope = BareBitcoinInvoiceScope.ForAccount(apiEndpoint, network, _accountId);
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
         if (maxRetries is < 0 or > 10) throw new ArgumentOutOfRangeException(nameof(maxRetries));
@@ -197,22 +200,24 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             try
             {
-                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
             catch (IOException ex)
             {
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist tracking for invoice {InvoiceId}, will retry on next access", invoiceId);
             }
         }
-        else if (status == LightningInvoiceStatus.Expired)
+        else
         {
             try
             {
-                await _invoiceService.UntrackInvoice(invoiceId, cancellation);
+                await _invoiceService.TryClaimLegacyInvoice(_invoiceScope, invoiceId, cancellation);
+                if (status == LightningInvoiceStatus.Expired)
+                    await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
             catch (IOException ex)
             {
-                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist untracking for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
+                _persistenceWarningThrottle.LogWarning(ex, "Failed to persist terminal tracking cleanup for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
             }
         }
 
@@ -285,7 +290,7 @@ public class BareBitcoinLightningClient : ILightningClient
             var invoices = new ConcurrentBag<LightningInvoice>();
             var isPendingOnly = request.PendingOnly.GetValueOrDefault(false);
 
-            var trackedInvoices = await _invoiceService.GetTrackedInvoices(cancellation);
+            var trackedInvoices = await _invoiceService.GetTrackedInvoices(_invoiceScope, cancellation);
 
             // Prune backoff entries for invoices no longer tracked
             foreach (var key in _rateLimitBackoff.Keys)
@@ -442,7 +447,7 @@ public class BareBitcoinLightningClient : ILightningClient
             // disk error must not prevent returning it to the caller.
             try
             {
-                await _invoiceService.TrackInvoice(invoiceId, cancellation);
+                await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, cancellation);
             }
             catch (IOException ex)
             {
@@ -490,7 +495,7 @@ public class BareBitcoinLightningClient : ILightningClient
             }
 
             Logger.LogInformation("Creating new listener");
-            _currentListener = new BareBitcoinListener(this, _invoiceService, Logger, maxPollConcurrency: _maxPollConcurrency);
+            _currentListener = new BareBitcoinListener(this, _invoiceService, _invoiceScope, Logger, maxPollConcurrency: _maxPollConcurrency);
             return _currentListener;
         }
         finally

@@ -46,13 +46,14 @@ public class BareBitcoinLightningClientTests
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
         ILogger? logger = null,
-        int maxRetries = 0)
+        int maxRetries = 0,
+        string accountId = "test-account")
     {
         var httpClient = new HttpClient(handler) { BaseAddress = new Uri("https://api.example.com") };
         return new BareBitcoinLightningClient(
             privateKey: TestPrivateKey,
             publicKey: "test-public-key",
-            accountId: "test-account",
+            accountId: accountId,
             apiEndpoint: new Uri("https://api.example.com"),
             network: Network.Main,
             httpClient: httpClient,
@@ -76,6 +77,104 @@ public class BareBitcoinLightningClientTests
         Assert.Equal("inv-1", result.Id);
         Assert.Equal(LightningInvoiceStatus.Unpaid, result.Status);
         Assert.Equal(TestBolt11, result.BOLT11);
+    }
+
+    [Fact]
+    public async Task OwningStoreStartupPoll_ReclaimsUnpaidLegacyInvoiceIntoItsScope()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-invoice\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-invoice");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Unpaid, invoice.Status);
+            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            Assert.Equal(["legacy-invoice"], await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
+
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task OwningStoreStartupPoll_KeepsPaidLegacyInvoiceTrackedUntilDelivery()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-paid\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-paid");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+            Assert.NotNull(invoice.PaidAt);
+            Assert.NotNull(invoice.AmountReceived);
+            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            var foreignScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "foreign-account");
+            Assert.Equal(["legacy-paid"], await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
+
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+            Assert.Contains("legacy-paid", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
+    public async Task OwningStoreStartupPoll_ClearsExpiredLegacyInvoiceFromQuarantine()
+    {
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, "[\"legacy-expired\"]");
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_EXPIRED")),
+                invoiceService,
+                accountId: "owner-account");
+
+            var invoice = await client.GetInvoice("legacy-expired");
+
+            Assert.NotNull(invoice);
+            Assert.Equal(LightningInvoiceStatus.Expired, invoice.Status);
+            await invoiceService.FlushAsync();
+            Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
     }
 
     [Fact]
@@ -127,6 +226,39 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task CreateInvoice_TracksInMemoryWhenPersistedSchemaIsUnsupported()
+    {
+        const string futureState =
+            "{\"version\":99,\"scopes\":{\"future-scope\":[\"future-invoice\"]},\"futureField\":true}";
+        var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
+        await File.WriteAllTextAsync(filePath, futureState);
+
+        try
+        {
+            await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
+            var client = CreateClient(
+                new FakeMessageHandler(CreateInvoiceApiJson()),
+                invoiceService,
+                accountId: "owner-account");
+
+            var result = await client.CreateInvoice(
+                new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+            Assert.Equal("dep-1", result.Id);
+            var ownerScope = BareBitcoinInvoiceScope.ForAccount(
+                new Uri("https://api.example.com"), Network.Main, "owner-account");
+            Assert.Equal(["dep-1"], await invoiceService.GetTrackedInvoices(ownerScope));
+
+            await invoiceService.FlushAsync();
+            Assert.Equal(futureState, await File.ReadAllTextAsync(filePath));
+        }
+        finally
+        {
+            File.Delete(filePath);
+        }
+    }
+
+    [Fact]
     public async Task GetInvoice_UsesApiKeyOnlyAuthHeaders()
     {
         var invoiceService = new ThrowingInvoiceService();
@@ -155,6 +287,25 @@ public class BareBitcoinLightningClientTests
         Assert.True(request.Headers.Contains("x-bb-api-key"));
         Assert.True(request.Headers.Contains("x-bb-api-nonce"));
         Assert.True(request.Headers.Contains("x-bb-api-hmac"));
+    }
+
+    [Fact]
+    public async Task CreateInvoice_TrimsAccountIdForApiRequestsAndScopeIdentity()
+    {
+        var invoiceService = new ScopedInMemoryInvoiceService();
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService, accountId: "  account-a  ");
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        var requestBody = Assert.Single(handler.RequestBodies);
+        Assert.Equal("account-a", Newtonsoft.Json.Linq.JObject.Parse(requestBody).Value<string>("accountId"));
+        Assert.Contains("account-id=account-a", client.ToString());
+
+        var normalizedScope = BareBitcoinInvoiceScope.ForAccount(
+            new Uri("https://api.example.com"), Network.Main, "account-a");
+        Assert.Equal(["dep-1"], await invoiceService.GetTrackedInvoices(normalizedScope));
     }
 
     [Fact]
@@ -228,17 +379,20 @@ public class BareBitcoinLightningClientTests
         Exception? untrackException = null,
         IReadOnlyCollection<string>? trackedInvoices = null) : IBareBitcoinInvoiceService
     {
-        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => trackException is not null
                 ? Task.FromException(trackException)
                 : Task.CompletedTask;
 
-        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => untrackException is not null
                 ? Task.FromException(untrackException)
                 : Task.CompletedTask;
 
-        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
     }
 
@@ -464,16 +618,21 @@ public class BareBitcoinLightningClientTests
     private sealed class RecordingMessageHandler(string responseBody) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<HttpRequestMessage> _requests = new();
+        private readonly ConcurrentQueue<string> _requestBodies = new();
         public HttpRequestMessage[] Requests => _requests.ToArray();
+        public string[] RequestBodies => _requestBodies.ToArray();
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Enqueue(request);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            if (request.Content is not null)
+                _requestBodies.Enqueue(await request.Content.ReadAsStringAsync(cancellationToken));
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 
@@ -507,6 +666,29 @@ public class BareBitcoinLightningClientTests
         Assert.Equal(2, result.Length);
         Assert.Contains(result, i => i.Id == "inv-ok");
         Assert.Contains(result, i => i.Id == "inv-ok2");
+    }
+
+    [Fact]
+    public async Task ListInvoices_ReturnsOnlyInvoicesOwnedByClientsAccount()
+    {
+        var invoiceService = new ScopedInMemoryInvoiceService();
+        var accountA = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+            invoiceService,
+            accountId: "account-a");
+        var accountB = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_UNPAID")),
+            invoiceService,
+            accountId: "account-b");
+
+        await accountA.GetInvoice("inv-a");
+        await accountB.GetInvoice("inv-b");
+
+        var invoicesA = await accountA.ListInvoices(new ListInvoicesParams());
+        var invoicesB = await accountB.ListInvoices(new ListInvoicesParams());
+
+        Assert.Equal(["inv-a"], invoicesA.Select(invoice => invoice.Id));
+        Assert.Equal(["inv-b"], invoicesB.Select(invoice => invoice.Id));
     }
 
     [Fact]
@@ -1039,20 +1221,67 @@ public class BareBitcoinLightningClientTests
 
     private sealed class MutableInvoiceService(HashSet<string> tracked) : IBareBitcoinInvoiceService
     {
-        public Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             tracked.Add(invoiceId);
             return Task.CompletedTask;
         }
 
-        public Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             tracked.Remove(invoiceId);
             return Task.CompletedTask;
         }
 
-        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(new HashSet<string>(tracked));
+    }
+
+    private sealed class ScopedInMemoryInvoiceService : IBareBitcoinInvoiceService
+    {
+        private readonly Dictionary<BareBitcoinInvoiceScope, HashSet<string>> _tracked = new();
+        private readonly object _lock = new();
+
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                if (!_tracked.TryGetValue(scope, out var invoices))
+                {
+                    invoices = new HashSet<string>();
+                    _tracked.Add(scope, invoices);
+                }
+                invoices.Add(invoiceId);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                if (_tracked.TryGetValue(scope, out var invoices))
+                    invoices.Remove(invoiceId);
+            }
+            return Task.CompletedTask;
+        }
+
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
+        {
+            lock (_lock)
+            {
+                IReadOnlyCollection<string> invoices = _tracked.TryGetValue(scope, out var tracked)
+                    ? new HashSet<string>(tracked)
+                    : Array.Empty<string>();
+                return Task.FromResult(invoices);
+            }
+        }
     }
 
     private sealed class CapturingLogger : ILogger

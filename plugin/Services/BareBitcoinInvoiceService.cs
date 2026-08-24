@@ -2,23 +2,28 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 /// <summary>
-/// Singleton service that maintains the central registry of invoices that need to be tracked for payment status.
-/// This service acts as the source of truth for which invoices should be monitored across all listener instances.
+/// Singleton service that maintains account-isolated registries of invoices that need to be tracked for payment status.
+/// Each client and listener can only access invoices through its owning Bare Bitcoin account scope.
 /// Provides thread-safe operations for adding, removing, and querying tracked invoices.
 /// Tracked invoices are persisted to disk so they survive server restarts.
 /// Disk writes are batched to avoid excessive I/O under high invoice throughput.
 /// </summary>
 public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
-    private readonly HashSet<string> _trackedInvoiceRegistry = new HashSet<string>();
+    private const int CurrentSchemaVersion = 2;
+    private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
+    private readonly Dictionary<string, string> _invoiceOwners = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unassignedLegacyInvoices = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
@@ -29,6 +34,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private long _snapshotVersion;
     private long _writtenVersion;
     private volatile int _consecutiveFlushFailures;
+    private string? _diskPersistenceDisabledReason;
     private bool _dirty;
     private bool _disposed;
     private Exception? _lastFlushException;
@@ -59,18 +65,32 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// Adds an invoice to the central tracking registry.
     /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
-    public async Task TrackInvoice(string invoiceId, CancellationToken cancellation = default)
+    public async Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            if (_trackedInvoiceRegistry.Add(invoiceId))
+            if (_invoiceOwners.TryGetValue(invoiceId, out var owningScope) &&
+                !StringComparer.Ordinal.Equals(owningScope, scope.Value))
             {
-                _logger.LogDebug("Added invoice {InvoiceId} to tracking registry (now tracking {Count} invoices)",
-                    invoiceId, _trackedInvoiceRegistry.Count);
-                if (!_dirty)
-                    ScheduleFlush();
-                _dirty = true;
+                _logger.LogWarning("Ignored conflicting ownership claim for tracked invoice {InvoiceId}", invoiceId);
+                return;
+            }
+
+            if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
+            {
+                invoices = new HashSet<string>(StringComparer.Ordinal);
+                _trackedInvoiceRegistry.Add(scope.Value, invoices);
+            }
+
+            var scopeChanged = invoices.Add(invoiceId);
+            var reclaimedLegacyInvoice = _unassignedLegacyInvoices.Remove(invoiceId);
+            if (scopeChanged || reclaimedLegacyInvoice)
+            {
+                _invoiceOwners[invoiceId] = scope.Value;
+                _logger.LogDebug("Added invoice {InvoiceId} to scoped tracking registry (scope now tracks {Count} invoices)",
+                    invoiceId, invoices.Count);
+                MarkRegistryChanged();
             }
         }
         finally
@@ -83,19 +103,60 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// Removes an invoice from the central tracking registry.
     /// The change is persisted to disk asynchronously via a flush timer.
     /// </summary>
-    public async Task UntrackInvoice(string invoiceId, CancellationToken cancellation = default)
+    public async Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            if (_trackedInvoiceRegistry.Remove(invoiceId))
+            if (_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices) && invoices.Remove(invoiceId))
             {
-                _logger.LogDebug("Removed invoice {InvoiceId} from tracking registry (now tracking {Count} invoices)",
-                    invoiceId, _trackedInvoiceRegistry.Count);
-                if (!_dirty)
-                    ScheduleFlush();
-                _dirty = true;
+                _invoiceOwners.Remove(invoiceId);
+                if (invoices.Count == 0)
+                    _trackedInvoiceRegistry.Remove(scope.Value);
+
+                _logger.LogDebug("Removed invoice {InvoiceId} from scoped tracking registry (scope now tracks {Count} invoices)",
+                    invoiceId, invoices.Count);
+                MarkRegistryChanged();
             }
+        }
+        finally
+        {
+            _invoiceTrackingLock.Release();
+        }
+    }
+
+    /// <summary>
+    /// Atomically claims a quarantined legacy invoice for a scope after a
+    /// successful lookup through BTCPay's owning-store connection. Conflicting
+    /// claims cannot replace or remove the established owner.
+    /// </summary>
+    public async Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+    {
+        await _invoiceTrackingLock.WaitAsync(cancellation);
+        try
+        {
+            if (!_unassignedLegacyInvoices.Contains(invoiceId))
+                return false;
+
+            if (_invoiceOwners.TryGetValue(invoiceId, out var owningScope) &&
+                !StringComparer.Ordinal.Equals(owningScope, scope.Value))
+            {
+                _logger.LogWarning("Ignored conflicting legacy ownership claim for invoice {InvoiceId}", invoiceId);
+                return false;
+            }
+
+            if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
+            {
+                invoices = new HashSet<string>(StringComparer.Ordinal);
+                _trackedInvoiceRegistry.Add(scope.Value, invoices);
+            }
+
+            invoices.Add(invoiceId);
+            _invoiceOwners[invoiceId] = scope.Value;
+            _unassignedLegacyInvoices.Remove(invoiceId);
+            _logger.LogDebug("Claimed invoice {InvoiceId} from the legacy quarantine", invoiceId);
+            MarkRegistryChanged();
+            return true;
         }
         finally
         {
@@ -106,12 +167,14 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// <summary>
     /// Returns a copy of the current tracking registry.
     /// </summary>
-    public async Task<IReadOnlyCollection<string>> GetTrackedInvoices(CancellationToken cancellation = default)
+    public async Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            return new HashSet<string>(_trackedInvoiceRegistry);
+            return _trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices)
+                ? new HashSet<string>(invoices, StringComparer.Ordinal)
+                : Array.Empty<string>();
         }
         finally
         {
@@ -124,6 +187,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
+        if (_diskPersistenceDisabledReason is not null)
+            return;
+
         try
         {
             if (!await TryAcquireAsync(_invoiceTrackingLock)) return;
@@ -240,6 +306,18 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
     internal int ConsecutiveFlushFailures => _consecutiveFlushFailures;
 
+    private void MarkRegistryChanged()
+    {
+        // An unknown future schema must remain byte-for-byte untouched. Continue
+        // tracking in memory so invoices created by this process are still polled.
+        if (_diskPersistenceDisabledReason is not null)
+            return;
+
+        if (!_dirty)
+            ScheduleFlush();
+        _dirty = true;
+    }
+
     private void ScheduleFlush() => ScheduleFlush(FlushInterval);
 
     private void ScheduleFlush(TimeSpan delay)
@@ -269,15 +347,68 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 return;
             }
 
-            var invoiceIds = JsonConvert.DeserializeObject<string[]>(json);
-            if (invoiceIds != null)
+            var token = JToken.Parse(json);
+            if (token.Type == JTokenType.Array)
             {
-                foreach (var id in invoiceIds)
+                foreach (var invoiceId in token.Values<string>().Where(id => !string.IsNullOrWhiteSpace(id)))
+                    _unassignedLegacyInvoices.Add(invoiceId!);
+
+                _logger.LogWarning(
+                    "Quarantined {Count} legacy tracked invoices because the persisted state has no account ownership information; " +
+                    "they will remain persisted and unavailable to scoped listeners until BTCPay's owning-store startup reconciliation reclaims or resolves them",
+                    _unassignedLegacyInvoices.Count);
+                _dirty = true;
+                ScheduleFlush();
+                return;
+            }
+
+            var persisted = token.ToObject<PersistedRegistry>();
+            if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
+            {
+                _diskPersistenceDisabledReason =
+                    $"Unsupported tracked invoice registry schema version {persisted?.Version.ToString() ?? "unknown"}";
+                _logger.LogError(
+                    "Tracked invoice persistence is disabled because {Path} uses unsupported schema version {Version}; " +
+                    "the file will remain unchanged and new invoices will be tracked in memory until it is explicitly migrated",
+                    _dataFilePath, persisted?.Version.ToString() ?? "unknown");
+                return;
+            }
+
+            foreach (var (scope, invoiceIds) in persisted.Scopes.OrderBy(entry => entry.Key, StringComparer.Ordinal))
+            {
+                if (string.IsNullOrWhiteSpace(scope) || invoiceIds is null)
+                    continue;
+
+                var validInvoiceIds = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var invoiceId in invoiceIds.Where(id => !string.IsNullOrWhiteSpace(id)))
                 {
-                    if (!string.IsNullOrWhiteSpace(id))
-                        _trackedInvoiceRegistry.Add(id);
+                    if (_invoiceOwners.TryAdd(invoiceId, scope))
+                        validInvoiceIds.Add(invoiceId);
+                    else if (!StringComparer.Ordinal.Equals(_invoiceOwners[invoiceId], scope))
+                        _dirty = true;
                 }
-                _logger.LogInformation("Loaded {Count} tracked invoices from disk", _trackedInvoiceRegistry.Count);
+
+                if (validInvoiceIds.Count > 0)
+                    _trackedInvoiceRegistry[scope] = validInvoiceIds;
+            }
+
+            var assignedInvoiceIds = _trackedInvoiceRegistry.Values
+                .SelectMany(invoices => invoices)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var invoiceId in persisted.UnassignedLegacyInvoices ?? Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(invoiceId) && !assignedInvoiceIds.Contains(invoiceId))
+                    _unassignedLegacyInvoices.Add(invoiceId);
+            }
+
+            _logger.LogInformation(
+                "Loaded {Count} tracked invoices across {ScopeCount} account scopes and {LegacyCount} quarantined legacy invoices from disk",
+                assignedInvoiceIds.Count, _trackedInvoiceRegistry.Count, _unassignedLegacyInvoices.Count);
+
+            if (_dirty)
+            {
+                _logger.LogWarning("Removed conflicting duplicate invoice ownership while loading persisted tracking state");
+                ScheduleFlush();
             }
         }
         catch (JsonException ex)
@@ -290,13 +421,40 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
+    // FlushAsync invokes this while holding _invoiceTrackingLock, so every
+    // collection below is snapshotted without concurrent mutation.
     internal virtual string SerializeRegistry()
     {
-        return JsonConvert.SerializeObject(_trackedInvoiceRegistry);
+        var scopes = _trackedInvoiceRegistry
+            .OrderBy(entry => entry.Key, StringComparer.Ordinal)
+            .ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.OrderBy(id => id, StringComparer.Ordinal).ToArray(),
+                StringComparer.Ordinal);
+        return JsonConvert.SerializeObject(new PersistedRegistry
+        {
+            Version = CurrentSchemaVersion,
+            Scopes = scopes,
+            UnassignedLegacyInvoices = _unassignedLegacyInvoices
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray()
+        });
     }
 
     internal virtual async Task SaveToDiskAsync(string json)
     {
         await _diskWriter.WriteAsync(json);
+    }
+
+    private sealed class PersistedRegistry
+    {
+        [JsonProperty("version")]
+        public int Version { get; init; }
+
+        [JsonProperty("scopes")]
+        public Dictionary<string, string[]>? Scopes { get; init; }
+
+        [JsonProperty("unassignedLegacyInvoices")]
+        public string[]? UnassignedLegacyInvoices { get; init; }
     }
 }
