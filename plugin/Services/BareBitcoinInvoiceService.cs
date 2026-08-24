@@ -22,6 +22,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 {
     private const int CurrentSchemaVersion = 2;
     private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _unassignedLegacyInvoices = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
     private readonly ILogger _logger;
@@ -73,7 +74,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 _trackedInvoiceRegistry.Add(scope.Value, invoices);
             }
 
-            if (invoices.Add(invoiceId))
+            var scopeChanged = invoices.Add(invoiceId);
+            var reclaimedLegacyInvoice = _unassignedLegacyInvoices.Remove(invoiceId);
+            if (scopeChanged || reclaimedLegacyInvoice)
             {
                 _logger.LogDebug("Added invoice {InvoiceId} to scoped tracking registry (scope now tracks {Count} invoices)",
                     invoiceId, invoices.Count);
@@ -286,10 +289,13 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
             var token = JToken.Parse(json);
             if (token.Type == JTokenType.Array)
             {
-                var legacyCount = token.Values<string>().Count(id => !string.IsNullOrWhiteSpace(id));
+                foreach (var invoiceId in token.Values<string>().Where(id => !string.IsNullOrWhiteSpace(id)))
+                    _unassignedLegacyInvoices.Add(invoiceId!);
+
                 _logger.LogWarning(
-                    "Discarding {Count} legacy tracked invoices because the persisted state has no account ownership information",
-                    legacyCount);
+                    "Quarantined {Count} legacy tracked invoices because the persisted state has no account ownership information; " +
+                    "they will remain persisted but unavailable to scoped clients until reclaimed by a scoped access",
+                    _unassignedLegacyInvoices.Count);
                 _dirty = true;
                 ScheduleFlush();
                 return;
@@ -311,8 +317,18 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                     _trackedInvoiceRegistry[scope] = validInvoiceIds;
             }
 
-            _logger.LogInformation("Loaded {Count} tracked invoices across {ScopeCount} account scopes from disk",
-                _trackedInvoiceRegistry.Values.Sum(invoices => invoices.Count), _trackedInvoiceRegistry.Count);
+            var assignedInvoiceIds = _trackedInvoiceRegistry.Values
+                .SelectMany(invoices => invoices)
+                .ToHashSet(StringComparer.Ordinal);
+            foreach (var invoiceId in persisted.UnassignedLegacyInvoices ?? Array.Empty<string>())
+            {
+                if (!string.IsNullOrWhiteSpace(invoiceId) && !assignedInvoiceIds.Contains(invoiceId))
+                    _unassignedLegacyInvoices.Add(invoiceId);
+            }
+
+            _logger.LogInformation(
+                "Loaded {Count} tracked invoices across {ScopeCount} account scopes and {LegacyCount} quarantined legacy invoices from disk",
+                assignedInvoiceIds.Count, _trackedInvoiceRegistry.Count, _unassignedLegacyInvoices.Count);
         }
         catch (JsonException ex)
         {
@@ -335,7 +351,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         return JsonConvert.SerializeObject(new PersistedRegistry
         {
             Version = CurrentSchemaVersion,
-            Scopes = scopes
+            Scopes = scopes,
+            UnassignedLegacyInvoices = _unassignedLegacyInvoices
+                .OrderBy(id => id, StringComparer.Ordinal)
+                .ToArray()
         });
     }
 
@@ -351,5 +370,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
         [JsonProperty("scopes")]
         public Dictionary<string, string[]>? Scopes { get; init; }
+
+        [JsonProperty("unassignedLegacyInvoices")]
+        public string[]? UnassignedLegacyInvoices { get; init; }
     }
 }

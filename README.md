@@ -11,6 +11,10 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 **Receive-only Lightning integration** — You can receive sats into your Bare Bitcoin account through BTCPay Server. Sending sats from your Bare Bitcoin account through BTCPay Server, including refunds, is not supported.
 
+## Tracked Invoice Migration
+
+Plugin versions that used the legacy flat tracked-invoice file did not persist which Bare Bitcoin account owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. A quarantined ID moves into an account scope only when that scoped client tracks the same invoice again. Until then, no listener can enumerate, query, or remove it.
+
 ## Installation
 
 1. In BTCPay Server, go to **Server Settings > Plugins**

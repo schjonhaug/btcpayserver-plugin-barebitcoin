@@ -106,7 +106,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task LegacyFlatRegistry_IsDiscardedAndRewrittenAsScopedState()
+    public async Task LegacyFlatRegistry_IsQuarantinedAndRewrittenAsScopedState()
     {
         File.WriteAllText(FilePath, "[\"legacy-a\",\"legacy-b\"]");
 
@@ -118,8 +118,50 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.FlushAsync();
         var persisted = File.ReadAllText(FilePath);
         Assert.Contains("\"version\":2", persisted);
-        Assert.DoesNotContain("legacy-a", persisted);
-        Assert.DoesNotContain("legacy-b", persisted);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-a\",\"legacy-b\"]", persisted);
+
+        await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        Assert.Empty(await reloaded.GetTrackedInvoices(Scope));
+        Assert.Empty(await reloaded.GetTrackedInvoices(OtherScope));
+    }
+
+    [Fact]
+    public async Task QuarantinedLegacyInvoice_CannotBeUntrackedByForeignScopeAndIsReclaimedByTracking()
+    {
+        File.WriteAllText(FilePath, "[\"legacy-a\",\"legacy-b\"]");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        await service.UntrackInvoice(OtherScope, "legacy-a");
+        await service.FlushAsync();
+
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-a\",\"legacy-b\"]", persisted);
+
+        await service.TrackInvoice(Scope, "legacy-a");
+        Assert.Equal(["legacy-a"], await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+
+        await service.FlushAsync();
+        persisted = File.ReadAllText(FilePath);
+        Assert.Contains("legacy-a", persisted);
+        Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-b\"]", persisted);
+    }
+
+    [Fact]
+    public async Task ScopedState_DoesNotReloadAssignedInvoiceAsQuarantined()
+    {
+        File.WriteAllText(FilePath,
+            "{\"version\":2,\"scopes\":{\"scope-a\":[\"shared\"]},\"unassignedLegacyInvoices\":[\"shared\",\"legacy\"]}");
+
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+        Assert.Equal(["shared"], await service.GetTrackedInvoices(Scope));
+
+        await service.FlushAsync();
+        await service.TrackInvoice(OtherScope, "legacy");
+        await service.FlushAsync();
+
+        var persisted = File.ReadAllText(FilePath);
+        Assert.Contains("\"unassignedLegacyInvoices\":[]", persisted);
     }
 
     [Fact]

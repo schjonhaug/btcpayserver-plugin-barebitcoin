@@ -67,6 +67,12 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             return null;
         }
 
+        if (string.IsNullOrWhiteSpace(accountId))
+        {
+            error = "The key 'account-id' must not be empty";
+            return null;
+        }
+
         var maxPollConcurrency = 10;
         if (kv.TryGetValue("max-poll-concurrency", out var maxPollConcurrencyStr))
         {

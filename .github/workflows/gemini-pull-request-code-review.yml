@@ -56,7 +56,9 @@ jobs:
           PATCH_FILE="$RUNNER_TEMP/gemini-pr.patch"
           git diff --no-ext-diff "$BASE_SHA" HEAD > "$PATCH_FILE"
           DIFF_SIZE=$(wc -c < "$PATCH_FILE")
-          MAX_SIZE=30000
+          # Keep below GitHub's 1 MB per-job output limit while allowing normal
+          # implementation-sized PRs to be reviewed in full.
+          MAX_SIZE=500000
           DIFF_DELIMITER="GEMINI_DIFF_$(openssl rand -hex 16)"
 
           if [ "$DIFF_SIZE" -gt "$MAX_SIZE" ]; then

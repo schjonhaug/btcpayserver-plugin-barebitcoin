@@ -108,6 +108,23 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         Assert.Equal("The key 'max-poll-concurrency' must be an integer between 1 and 100", error);
     }
 
+    [Theory]
+    [InlineData("")]
+    [InlineData(" ")]
+    [InlineData("   ")]
+    public void Create_WithBlankAccountId_ReturnsError(string accountId)
+    {
+        var handler = CreateHandler();
+
+        var client = handler.Create(
+            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id={accountId}",
+            Network.Main,
+            out var error);
+
+        Assert.Null(client);
+        Assert.Equal("The key 'account-id' must not be empty", error);
+    }
+
     private sealed class StubHttpClientFactory(HttpClient client) : IHttpClientFactory
     {
         private readonly HttpClient _client = client;
