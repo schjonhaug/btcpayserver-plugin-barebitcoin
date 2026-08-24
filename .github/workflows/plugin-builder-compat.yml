@@ -31,10 +31,7 @@ jobs:
       - name: Setup .NET 10
         uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
         with:
-          dotnet-version: 10.0.x
-
-      - name: Pin SDK to .NET 10
-        run: dotnet new globaljson --sdk-version 10.0.100 --roll-forward latestFeature
+          global-json-file: global.json
 
       - name: Show environment
         run: dotnet --info
@@ -62,5 +59,42 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Build ConfigBuilder container
-        run: docker build --file ConfigBuilder/Dockerfile --tag barebitcoin-config-builder:test .
+      - name: Setup .NET 10
+        uses: actions/setup-dotnet@a98b56852c35b8e3190ac28c8c2271da59106c68 # v6.0.0
+        with:
+          global-json-file: global.json
+
+      - name: Publish ConfigBuilder container
+        run: dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release /t:PublishContainer
+
+      - name: Smoke-test ConfigBuilder container
+        run: |
+          set -euo pipefail
+          workspace="$(mktemp -d)"
+          mkdir -p "$workspace/ConfigBuilder/bin/Release/net10.0"
+          mkdir -p "$workspace/Plugins/SamplePlugin/bin/Release/net10.0"
+          mkdir -p "$workspace/submodules/btcpayserver/BTCPayServer"
+          : > "$workspace/Plugins/SamplePlugin/bin/Release/net10.0/SamplePlugin.dll"
+          : > "$workspace/submodules/btcpayserver/BTCPayServer/BTCPayServer.csproj"
+
+          docker run --rm \
+            --volume "$workspace:/workspace" \
+            --workdir /workspace/ConfigBuilder/bin/Release/net10.0 \
+            barebitcoin-config-builder:test
+
+          python3 - "$workspace/submodules/btcpayserver/BTCPayServer/appsettings.dev.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          settings_path = Path(sys.argv[1])
+          if not settings_path.is_file():
+              raise SystemExit(f"missing {settings_path}")
+
+          settings = json.loads(settings_path.read_text())
+          plugins = settings.get("DEBUG_PLUGINS", "")
+          expected = "/workspace/Plugins/SamplePlugin/bin/Release/net10.0/SamplePlugin.dll;"
+          if expected not in plugins:
+              raise SystemExit(f"unexpected DEBUG_PLUGINS: {plugins!r}")
+          print("ConfigBuilder wrote DEBUG_PLUGINS for the mounted workspace")
+          PY

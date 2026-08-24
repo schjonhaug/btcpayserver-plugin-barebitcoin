@@ -5,15 +5,32 @@
         <TargetFramework>net10.0</TargetFramework>
         <ImplicitUsings>enable</ImplicitUsings>
         <Nullable>enable</Nullable>
-        <DockerDefaultTargetOS>Linux</DockerDefaultTargetOS>
         <Configurations>Debug;Release;Altcoins-Debug;Altcoins-Release</Configurations>
         <Platforms>AnyCPU</Platforms>
-    </PropertyGroup>
 
-    <ItemGroup>
-      <Content Include="..\.dockerignore">
-        <Link>.dockerignore</Link>
-      </Content>
-    </ItemGroup>
+        <!--
+          Publish with: dotnet publish /t:PublishContainer
+          .NET 10 console apps do not need EnableSdkContainerSupport.
+          The SDK picks mcr.microsoft.com/dotnet/runtime:<tfm>-noble from
+          TargetFramework, so the runtime image cannot drift independently.
+        -->
+        <ContainerRepository>barebitcoin-config-builder</ContainerRepository>
+        <ContainerImageTag>test</ContainerImageTag>
+        <ContainerImageFormat>OCI</ContainerImageFormat>
+        <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+        <!-- Ubuntu 24.04; .NET 10 does not ship Debian runtime images. -->
+        <ContainerFamily>noble</ContainerFamily>
+        <!--
+          Keep the published app in /app. Program.cs resolves Plugins/ and
+          BTCPay Server four directories up from the process working directory,
+          so docker run must set workdir under the mounted workspace. Putting
+          that workdir on the image would hide the binaries when /workspace
+          is bind-mounted.
+        -->
+        <!-- Trailing slash is required; the SDK concatenates this path with the DLL name. -->
+        <ContainerWorkingDirectory>/app/</ContainerWorkingDirectory>
+        <!-- Root can write appsettings.dev.json on typical bind mounts. -->
+        <ContainerUser>root</ContainerUser>
+    </PropertyGroup>
 
 </Project>

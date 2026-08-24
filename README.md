@@ -61,7 +61,7 @@ Use the provided script to generate your BTCPay Server connection string:
 
 ### Prerequisites
 
-Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The plugin and tests target `net10.0`.
+Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). The plugin and tests target `net10.0`. The repository `global.json` pins SDK `10.0.100` with `rollForward: latestFeature`, which is the same policy CI uses.
 
 This branch supports BTCPay Server `2.3.7` and newer at runtime.
 
@@ -104,6 +104,34 @@ Build the plugin:
 ```shell
 dotnet build ../btcpayserver-plugin-barebitcoin/plugin/BTCPayServer.Plugins.BareBitcoin.csproj
 ```
+
+### ConfigBuilder container
+
+ConfigBuilder is an optional development helper that writes `DEBUG_PLUGINS` into BTCPay Server's `appsettings.dev.json`. This repository still publishes it as a container so the runtime image stays coupled to the project's `net10.0` target framework.
+
+There is no Dockerfile. Publish the image with the .NET 10 SDK:
+
+```shell
+dotnet publish ConfigBuilder/ConfigBuilder.csproj -c Release /t:PublishContainer
+```
+
+The SDK selects `mcr.microsoft.com/dotnet/runtime:10.0-noble` from `TargetFramework` (`net10.0`) plus `ContainerFamily` (`noble`). That is Ubuntu 24.04, the default Linux distribution for official .NET 10 images. Debian variants are not published for .NET 10.
+
+`Program.cs` resolves the plugin workspace four directories up from the process working directory:
+
+- `../../../../Plugins` — plugin project directories named after their DLLs
+- `../../../../btcpayserver/BTCPayServer` or `../../../../submodules/btcpayserver/BTCPayServer` — a checkout that contains `BTCPayServer.csproj`
+
+The published binaries stay in `/app`. Set the process working directory four levels below the mounted workspace so those relatives resolve to `/workspace`:
+
+```shell
+docker run --rm \
+  --volume /path/to/plugins-workspace:/workspace \
+  --workdir /workspace/ConfigBuilder/bin/Release/net10.0 \
+  barebitcoin-config-builder:test
+```
+
+The container runs as root so it can write `appsettings.dev.json` on the bind mount. This single-plugin repository uses `plugin/` rather than `Plugins/`; the README setup below writes `appsettings.dev.json` directly.
 
 ### Run Locally
 
