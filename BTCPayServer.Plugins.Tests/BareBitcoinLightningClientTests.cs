@@ -305,6 +305,25 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task CreateInvoice_TrimsAccountIdForApiRequestsAndScopeIdentity()
+    {
+        var invoiceService = new ScopedInMemoryInvoiceService();
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, invoiceService, accountId: "  account-a  ");
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(1000), "test", TimeSpan.FromHours(1)));
+
+        var requestBody = Assert.Single(handler.RequestBodies);
+        Assert.Equal("account-a", Newtonsoft.Json.Linq.JObject.Parse(requestBody).Value<string>("accountId"));
+        Assert.Contains("account-id=account-a", client.ToString());
+
+        var normalizedScope = BareBitcoinInvoiceScope.ForAccount(
+            new Uri("https://api.example.com"), Network.Main, "account-a");
+        Assert.Equal(["dep-1"], await invoiceService.GetTrackedInvoices(normalizedScope));
+    }
+
+    [Fact]
     public async Task CreateInvoice_PropagatesOperationCanceledException_FromTrackInvoice()
     {
         var invoiceService = new ThrowingInvoiceService(
@@ -617,16 +636,21 @@ public class BareBitcoinLightningClientTests
     private sealed class RecordingMessageHandler(string responseBody) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<HttpRequestMessage> _requests = new();
+        private readonly ConcurrentQueue<string> _requestBodies = new();
         public HttpRequestMessage[] Requests => _requests.ToArray();
+        public string[] RequestBodies => _requestBodies.ToArray();
 
-        protected override Task<HttpResponseMessage> SendAsync(
+        protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request, CancellationToken cancellationToken)
         {
             _requests.Enqueue(request);
-            return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+            if (request.Content is not null)
+                _requestBodies.Enqueue(await request.Content.ReadAsStringAsync(cancellationToken));
+
+            return new HttpResponseMessage(HttpStatusCode.OK)
             {
                 Content = new StringContent(responseBody, Encoding.UTF8, "application/json")
-            });
+            };
         }
     }
 

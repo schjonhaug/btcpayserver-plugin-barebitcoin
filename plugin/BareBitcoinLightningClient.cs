@@ -41,15 +41,16 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3)
     {
+        ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         _privateKey = privateKey;
         _publicKey = publicKey;
-        _accountId = accountId;
+        _accountId = accountId.Trim();
         _apiEndpoint = apiEndpoint;
         _network = network;
         _httpClient = httpClient;
         Logger = logger;
         _invoiceService = invoiceService;
-        _invoiceScope = BareBitcoinInvoiceScope.ForAccount(apiEndpoint, network, accountId);
+        _invoiceScope = BareBitcoinInvoiceScope.ForAccount(apiEndpoint, network, _accountId);
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
         if (maxRetries is < 0 or > 10) throw new ArgumentOutOfRangeException(nameof(maxRetries));
