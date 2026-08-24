@@ -134,7 +134,7 @@ public class BareBitcoinInvoiceLifecycleTests
             TestContext.Current.CancellationToken));
 
         Assert.NotNull(exception);
-        Assert.Equal(expectedExceptionType, exception.GetType());
+        Assert.IsType(expectedExceptionType, exception);
         Assert.Empty(invoiceService.TrackCalls);
         Assert.Empty(await invoiceService.GetTrackedInvoices(
             Scope("test-account"), TestContext.Current.CancellationToken));
@@ -221,6 +221,37 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
+    public async Task GetInvoice_PaidWithPreimagePreservesProviderPreimageAndStaysTracked()
+    {
+        const string invoiceId = "paid-with-preimage-id";
+        const string accountId = "paid-with-preimage-owner";
+        const string providerPreimage = "provider-preimage";
+        var scope = Scope(accountId);
+        var invoiceService = new RecordingInvoiceService();
+        await invoiceService.TrackInvoice(scope, invoiceId, TestContext.Current.CancellationToken);
+        invoiceService.ClearCalls();
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(
+                AmountBearingBolt11,
+                "INVOICE_STATUS_PAID",
+                providerPreimage)),
+            invoiceService,
+            accountId);
+
+        var invoice = await client.GetInvoice(invoiceId, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+        Assert.Equal(providerPreimage, invoice.Preimage);
+        Assert.Equal(Parse(AmountBearingBolt11).MinimumAmount, invoice.AmountReceived);
+        Assert.Equal([invoiceId], await invoiceService.GetTrackedInvoices(
+            scope, TestContext.Current.CancellationToken));
+        Assert.Empty(invoiceService.TrackCalls);
+        Assert.Empty(invoiceService.UntrackCalls);
+        Assert.Equal([new ScopedInvoiceCall(scope, invoiceId)], invoiceService.ClaimCalls);
+    }
+
+    [Fact]
     public async Task TwoConnections_ReloadAndDeliverOnlyTheirOwnPaidInvoices()
     {
         const string accountA = "account-a";
@@ -261,7 +292,7 @@ public class BareBitcoinInvoiceLifecycleTests
 
             var restartedClientA = CreateClient(providerA, reloadedService, accountA);
             var restartedClientB = CreateClient(providerB, reloadedService, accountB);
-            var listeners = await Task.WhenAll(
+            var listeners = await StartListenersConcurrently(
                 restartedClientA.Listen(TestContext.Current.CancellationToken),
                 restartedClientB.Listen(TestContext.Current.CancellationToken));
             Assert.NotSame(listeners[0], listeners[1]);
@@ -357,6 +388,25 @@ public class BareBitcoinInvoiceLifecycleTests
             await Task.Delay(TimeSpan.FromMilliseconds(10), cancellation);
     }
 
+    private static async Task<ILightningInvoiceListener[]> StartListenersConcurrently(
+        params Task<ILightningInvoiceListener>[] listenerTasks)
+    {
+        try
+        {
+            return await Task.WhenAll(listenerTasks);
+        }
+        catch
+        {
+            foreach (var listenerTask in listenerTasks)
+            {
+                if (listenerTask.IsCompletedSuccessfully)
+                    listenerTask.Result.Dispose();
+            }
+
+            throw;
+        }
+    }
+
     private sealed class StaticResponseHandler(string response) : HttpMessageHandler
     {
         protected override Task<HttpResponseMessage> SendAsync(
@@ -378,7 +428,9 @@ public class BareBitcoinInvoiceLifecycleTests
             if (request.Method == HttpMethod.Post)
                 return Task.FromResult(JsonResponse(CreateResponse(invoiceId, bolt11)));
 
-            var requestedInvoiceId = request.RequestUri!.Segments[^1].TrimEnd('/');
+            var pathSegments = request.RequestUri!.AbsolutePath
+                .Split('/', StringSplitOptions.RemoveEmptyEntries);
+            var requestedInvoiceId = pathSegments.LastOrDefault() ?? string.Empty;
             _queriedInvoiceIds.Enqueue(requestedInvoiceId);
             if (!StringComparer.Ordinal.Equals(invoiceId, requestedInvoiceId))
                 return Task.FromResult(new HttpResponseMessage(HttpStatusCode.NotFound));
