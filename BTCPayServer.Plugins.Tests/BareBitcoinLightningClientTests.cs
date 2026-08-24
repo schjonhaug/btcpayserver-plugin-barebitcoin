@@ -114,7 +114,7 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
-    public async Task OwningStoreStartupPoll_ReturnsPaidLegacyInvoiceForImmediateRecording()
+    public async Task OwningStoreStartupPoll_KeepsPaidLegacyInvoiceTrackedUntilDelivery()
     {
         var filePath = Path.Combine(Path.GetTempPath(), Path.GetRandomFileName());
         await File.WriteAllTextAsync(filePath, "[\"legacy-paid\"]");
@@ -137,11 +137,12 @@ public class BareBitcoinLightningClientTests
                 new Uri("https://api.example.com"), Network.Main, "owner-account");
             var foreignScope = BareBitcoinInvoiceScope.ForAccount(
                 new Uri("https://api.example.com"), Network.Main, "foreign-account");
-            Assert.Empty(await invoiceService.GetTrackedInvoices(ownerScope));
+            Assert.Equal(["legacy-paid"], await invoiceService.GetTrackedInvoices(ownerScope));
             Assert.Empty(await invoiceService.GetTrackedInvoices(foreignScope));
 
             await invoiceService.FlushAsync();
             Assert.Contains("\"unassignedLegacyInvoices\":[]", await File.ReadAllTextAsync(filePath));
+            Assert.Contains("legacy-paid", await File.ReadAllTextAsync(filePath));
         }
         finally
         {
