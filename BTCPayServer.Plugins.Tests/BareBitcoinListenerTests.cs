@@ -806,8 +806,8 @@ public class BareBitcoinListenerTests : IDisposable
             return inner.UntrackInvoice(scope, invoiceId, cancellation);
         }
 
-        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => inner.ResolveLegacyInvoice(scope, invoiceId, cancellation);
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.TryClaimLegacyInvoice(scope, invoiceId, cancellation);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => inner.GetTrackedInvoices(scope, cancellation);
@@ -821,8 +821,8 @@ public class BareBitcoinListenerTests : IDisposable
         public Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => throw new IOException("Simulated persistent disk failure");
 
-        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => inner.ResolveLegacyInvoice(scope, invoiceId, cancellation);
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.TryClaimLegacyInvoice(scope, invoiceId, cancellation);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => inner.GetTrackedInvoices(scope, cancellation);

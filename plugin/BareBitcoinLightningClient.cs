@@ -210,9 +210,10 @@ public class BareBitcoinLightningClient : ILightningClient
         {
             try
             {
-                if (status == LightningInvoiceStatus.Expired)
+                var reclaimedLegacyInvoice = await _invoiceService.TryClaimLegacyInvoice(
+                    _invoiceScope, invoiceId, cancellation);
+                if (status == LightningInvoiceStatus.Expired || reclaimedLegacyInvoice)
                     await _invoiceService.UntrackInvoice(_invoiceScope, invoiceId, cancellation);
-                await _invoiceService.ResolveLegacyInvoice(_invoiceScope, invoiceId, cancellation);
             }
             catch (IOException ex)
             {

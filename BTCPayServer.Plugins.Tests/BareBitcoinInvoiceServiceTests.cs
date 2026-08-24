@@ -168,6 +168,23 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
+    public async Task ForeignScope_CannotResolveLegacyInvoiceAfterOwnerClaimsIt()
+    {
+        File.WriteAllText(FilePath, "[\"legacy-a\"]");
+        await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
+
+        Assert.True(await service.TryClaimLegacyInvoice(Scope, "legacy-a"));
+        Assert.False(await service.TryClaimLegacyInvoice(OtherScope, "legacy-a"));
+        await service.UntrackInvoice(OtherScope, "legacy-a");
+
+        Assert.Equal(["legacy-a"], await service.GetTrackedInvoices(Scope));
+        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+
+        await service.UntrackInvoice(Scope, "legacy-a");
+        Assert.Empty(await service.GetTrackedInvoices(Scope));
+    }
+
+    [Fact]
     public async Task DuplicatePersistedOwnership_IsCanonicalizedToOneScope()
     {
         File.WriteAllText(FilePath,

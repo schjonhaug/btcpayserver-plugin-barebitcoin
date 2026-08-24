@@ -336,8 +336,8 @@ public class BareBitcoinLightningClientTests
                 ? Task.FromException(untrackException)
                 : Task.CompletedTask;
 
-        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => Task.CompletedTask;
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(trackedInvoices ?? Array.Empty<string>());
@@ -1175,8 +1175,8 @@ public class BareBitcoinLightningClientTests
             return Task.CompletedTask;
         }
 
-        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => Task.CompletedTask;
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
             => Task.FromResult<IReadOnlyCollection<string>>(new HashSet<string>(tracked));
@@ -1211,8 +1211,8 @@ public class BareBitcoinLightningClientTests
             return Task.CompletedTask;
         }
 
-        public Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
-            => Task.CompletedTask;
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(false);
 
         public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
         {

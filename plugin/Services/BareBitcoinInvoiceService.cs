@@ -129,22 +129,39 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     }
 
     /// <summary>
-    /// Removes a terminal invoice from the legacy quarantine after BTCPay has
-    /// reconciled it through the owning store's scoped connection. This never
-    /// reads or removes invoices assigned to any account scope.
+    /// Atomically claims a quarantined legacy invoice for a scope after a
+    /// successful lookup through BTCPay's owning-store connection. Conflicting
+    /// claims cannot replace or remove the established owner.
     /// </summary>
-    public async Task ResolveLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+    public async Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
     {
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
-            if (_unassignedLegacyInvoices.Remove(invoiceId))
+            if (!_unassignedLegacyInvoices.Contains(invoiceId))
+                return false;
+
+            if (_invoiceOwners.TryGetValue(invoiceId, out var owningScope) &&
+                !StringComparer.Ordinal.Equals(owningScope, scope.Value))
             {
-                _logger.LogDebug("Resolved invoice {InvoiceId} from the legacy quarantine", invoiceId);
-                if (!_dirty)
-                    ScheduleFlush();
-                _dirty = true;
+                _logger.LogWarning("Ignored conflicting legacy ownership claim for invoice {InvoiceId}", invoiceId);
+                return false;
             }
+
+            if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
+            {
+                invoices = new HashSet<string>(StringComparer.Ordinal);
+                _trackedInvoiceRegistry.Add(scope.Value, invoices);
+            }
+
+            invoices.Add(invoiceId);
+            _invoiceOwners[invoiceId] = scope.Value;
+            _unassignedLegacyInvoices.Remove(invoiceId);
+            _logger.LogDebug("Claimed invoice {InvoiceId} from the legacy quarantine", invoiceId);
+            if (!_dirty)
+                ScheduleFlush();
+            _dirty = true;
+            return true;
         }
         finally
         {
@@ -386,6 +403,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
+    // FlushAsync invokes this while holding _invoiceTrackingLock, so every
+    // collection below is snapshotted without concurrent mutation.
     internal virtual string SerializeRegistry()
     {
         var scopes = _trackedInvoiceRegistry
