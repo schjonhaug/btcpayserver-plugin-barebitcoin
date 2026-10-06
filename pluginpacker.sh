@@ -162,7 +162,12 @@ restore_project_file() {
     git -C "$repoRoot" checkout HEAD -- "$projectFile"
   fi
 }
-trap restore_project_file EXIT INT TERM
+trap restore_project_file EXIT
+# The signal handlers only exit; the EXIT trap then restores. Restoring from
+# the signal handler alone would let the run continue past the interruption,
+# packaging or committing the version the restore just reverted.
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 perl -0pi -e "s:<Version>[^<]+</Version>:<Version>$version</Version>:" "$projectFile"
 
