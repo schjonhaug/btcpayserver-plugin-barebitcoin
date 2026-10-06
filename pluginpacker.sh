@@ -150,9 +150,12 @@ echo "Preparing release $tag from current version $currentVersion"
 # worktree by then. Restoring it keeps the clean-worktree check meaningful, so
 # a failed run can be repeated once its cause is fixed.
 projectFileCommitted=false
+repoRoot="$(git rev-parse --show-toplevel)"
 restore_project_file() {
   if [ "$projectFileCommitted" = false ]; then
-    git checkout -- "$projectFile"
+    # -C because packaging runs from $pluginDir, and HEAD because the bump may
+    # already be staged: restoring from the index would keep it.
+    git -C "$repoRoot" checkout HEAD -- "$projectFile"
   fi
 }
 trap restore_project_file EXIT
