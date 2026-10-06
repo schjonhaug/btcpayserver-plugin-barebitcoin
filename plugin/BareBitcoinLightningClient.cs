@@ -43,6 +43,12 @@ public class BareBitcoinLightningClient : ILightningClient
 
     internal static readonly TimeSpan InvoiceExpiryTolerance = TimeSpan.FromSeconds(30);
 
+    // Bare Bitcoin accepts expirySeconds between 60 seconds and 24 hours. Outside
+    // that range the provider cannot match the BTCPay monitoring window, so the
+    // invoice is rejected rather than created with a mismatched lifetime.
+    internal static readonly TimeSpan MinimumProviderExpiry = TimeSpan.FromSeconds(60);
+    internal static readonly TimeSpan MaximumProviderExpiry = TimeSpan.FromHours(24);
+
     public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, string storeId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
@@ -426,6 +432,7 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
+            var expirySeconds = ToProviderExpirySeconds(createInvoiceRequest.Expiry);
             var requestedExpiryDate = _timeProvider.GetUtcNow() + createInvoiceRequest.Expiry;
             var requestData = new
             {
@@ -433,7 +440,8 @@ public class BareBitcoinLightningClient : ILightningClient
                 currency = "CURRENCY_BTC",
                 amount = createInvoiceRequest.Amount.ToDecimal(LightMoneyUnit.BTC),
                 publicDescription = createInvoiceRequest.Description,
-                internalDescription = $"BTCPay Server Invoice - {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss}"
+                internalDescription = $"BTCPay Server Invoice - {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss}",
+                expirySeconds
             };
 
             var response = await _apiService.MakeAuthenticatedRequest(
@@ -493,6 +501,26 @@ public class BareBitcoinLightningClient : ILightningClient
         if (bolt11.PaymentHash is null)
             throw new InvalidOperationException("Bare Bitcoin returned a BOLT11 without a payment hash");
         return bolt11;
+    }
+
+    // The provider counts the lifetime from its own creation time, so the
+    // requested BTCPay monitoring window is forwarded as a duration rather than
+    // a deadline. The response expiry is still validated against our own clock.
+    internal static uint ToProviderExpirySeconds(TimeSpan expiry)
+    {
+        // The provider only accepts whole seconds, so the range is checked
+        // against the value actually sent. Monitoring windows are commonly
+        // derived from timestamp subtraction, and sub-second remainders must
+        // not reject a window the provider would have accepted.
+        var seconds = (long)Math.Round(expiry.TotalSeconds, MidpointRounding.AwayFromZero);
+        if (seconds < (long)MinimumProviderExpiry.TotalSeconds)
+            throw new InvalidOperationException(
+                $"BTCPay requested a {seconds}s invoice lifetime, but Bare Bitcoin requires at least {(long)MinimumProviderExpiry.TotalSeconds}s; a longer invoice would stay payable past the monitoring deadline");
+        if (seconds > (long)MaximumProviderExpiry.TotalSeconds)
+            throw new InvalidOperationException(
+                $"BTCPay requested a {seconds}s invoice lifetime, but Bare Bitcoin supports at most {(long)MaximumProviderExpiry.TotalSeconds}s");
+
+        return (uint)seconds;
     }
 
     private void ValidateCreatedInvoice(
