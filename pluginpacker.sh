@@ -23,13 +23,13 @@ resolve_btcpayserver_dir() {
       echo "BTCPAYSERVER_DIR=$BTCPAYSERVER_DIR has no BTCPayServer.PluginPacker project." >&2
       return 1
     fi
-    (cd -- "$BTCPAYSERVER_DIR" >/dev/null && pwd) || return 1
+    (cd -- "$BTCPAYSERVER_DIR" >/dev/null && pwd -P) || return 1
     return 0
   fi
 
   for candidate in "submodules/btcpayserver" "../btcpayserver"; do
     if has_plugin_packer "$candidate"; then
-      (cd -- "$candidate" >/dev/null && pwd) || return 1
+      (cd -- "$candidate" >/dev/null && pwd -P) || return 1
       return 0
     fi
   done
@@ -146,6 +146,17 @@ fi
 
 echo "Preparing release $tag from current version $currentVersion"
 
+# Everything up to the commit can fail, and the version bump is already in the
+# worktree by then. Restoring it keeps the clean-worktree check meaningful, so
+# a failed run can be repeated once its cause is fixed.
+projectFileCommitted=false
+restore_project_file() {
+  if [ "$projectFileCommitted" = false ]; then
+    git checkout -- "$projectFile"
+  fi
+}
+trap restore_project_file EXIT
+
 perl -0pi -e "s:<Version>[^<]+</Version>:<Version>$version</Version>:" "$projectFile"
 
 dotnet test --project BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release --minimum-expected-tests 1
@@ -165,7 +176,7 @@ if [ "$packageLocal" = true ]; then
   pushd "$pluginDir"
     rm -rf tmp/publish tmp/publish-package tmp/out
     dotnet publish -c Release -o "tmp/publish"
-    "$pluginPackerOut/BTCPayServer.PluginPacker" "tmp/publish" "$fullName" "tmp/publish-package"
+    dotnet "$pluginPackerOut/BTCPayServer.PluginPacker.dll" "tmp/publish" "$fullName" "tmp/publish-package"
     mkdir -p tmp/out
     cp tmp/publish-package/*/*/* tmp/out
     rm -f tmp/out/SHA256SUMS.asc tmp/out/SHA256SUMS
@@ -178,6 +189,7 @@ fi
 
 git add "$projectFile"
 git commit -m "Release $tag"
+projectFileCommitted=true
 git tag "$tag"
 
 if [ "$pushRelease" = true ]; then
