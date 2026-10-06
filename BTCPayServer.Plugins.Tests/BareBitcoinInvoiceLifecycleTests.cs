@@ -104,6 +104,7 @@ public class BareBitcoinInvoiceLifecycleTests
             BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
 
     [Theory]
+    [InlineData(59.5, 60u)]
     [InlineData(59.6, 60u)]
     [InlineData(900.4, 900u)]
     [InlineData(86_400.4, 86_400u)]
@@ -113,6 +114,16 @@ public class BareBitcoinInvoiceLifecycleTests
         Assert.Equal(
             expected,
             BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+    [Fact]
+    public void ToProviderExpirySeconds_RejectsMidpointAboveTheProviderMaximum()
+    {
+        // AwayFromZero sends 86_401s, which the provider would reject.
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(86_400.5)));
+
+        Assert.Contains("86401s invoice lifetime", exception.Message, StringComparison.Ordinal);
+    }
 
     [Theory]
     [InlineData(-1)]
