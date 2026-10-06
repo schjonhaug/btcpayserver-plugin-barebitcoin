@@ -23,16 +23,25 @@ resolve_btcpayserver_dir() {
       echo "BTCPAYSERVER_DIR=$BTCPAYSERVER_DIR has no BTCPayServer.PluginPacker project." >&2
       return 1
     fi
-    (cd "$BTCPAYSERVER_DIR" && pwd)
+    (cd -- "$BTCPAYSERVER_DIR" >/dev/null && pwd) || return 1
     return 0
   fi
 
   for candidate in "submodules/btcpayserver" "../btcpayserver"; do
     if has_plugin_packer "$candidate"; then
-      (cd "$candidate" && pwd)
+      (cd -- "$candidate" >/dev/null && pwd) || return 1
       return 0
     fi
   done
+
+  cat >&2 <<EOF
+Could not find BTCPay Server sources for the local .btcpay package.
+Looked for BTCPayServer.PluginPacker in:
+  submodules/btcpayserver
+  ../btcpayserver
+Initialize the submodule with: git submodule update --init submodules/btcpayserver
+Or set BTCPAYSERVER_DIR to a BTCPay Server checkout.
+EOF
   return 1
 }
 
@@ -44,9 +53,9 @@ Creates a reproducible Plugin Builder pre-release candidate:
   1. validates master, a clean worktree, and the BTCPay Server sources
   2. updates $projectFile
   3. runs tests
-  4. commits "Release v<version>"
-  5. creates tag v<version>
-  6. creates a local .btcpay package unless --no-package is passed
+  4. creates a local .btcpay package unless --no-package is passed
+  5. commits "Release v<version>"
+  6. creates tag v<version>
   7. pushes master and tag unless --no-push is passed
   8. prints the Plugin Builder form values
 
@@ -123,15 +132,7 @@ fi
 btcpayServerDir=""
 if [ "$packageLocal" = true ]; then
   if ! btcpayServerDir="$(resolve_btcpayserver_dir)"; then
-    cat >&2 <<EOF
-Could not find BTCPay Server sources for the local .btcpay package.
-Looked for BTCPayServer.PluginPacker in:
-  \$BTCPAYSERVER_DIR (${BTCPAYSERVER_DIR:-unset})
-  submodules/btcpayserver
-  ../btcpayserver
-Initialize the submodule with: git submodule update --init submodules/btcpayserver
-Or pass --no-package; Plugin Builder builds the package from the tag anyway.
-EOF
+    echo "Or pass --no-package; Plugin Builder builds the package from the tag anyway." >&2
     exit 1
   fi
   echo "Using BTCPay Server sources at $btcpayServerDir"
@@ -149,12 +150,9 @@ perl -0pi -e "s:<Version>[^<]+</Version>:<Version>$version</Version>:" "$project
 
 dotnet test --project BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release --minimum-expected-tests 1
 
-git add "$projectFile"
-git commit -m "Release $tag"
-git tag "$tag"
-
-# Packaging runs before the push so a packaging failure leaves the release
-# commit and tag local, where they can still be amended or deleted.
+# Packaging only reads the bumped project file, so it runs before the commit
+# and tag. A packaging failure then leaves git untouched and the run can simply
+# be repeated.
 if [ "$packageLocal" = true ]; then
   # The packer is built outside the BTCPay Server checkout. Building into it
   # leaves untracked output behind, which fails the clean-worktree check on the
@@ -177,6 +175,10 @@ if [ "$packageLocal" = true ]; then
 else
   echo "Skipping local .btcpay package because --no-package was passed."
 fi
+
+git add "$projectFile"
+git commit -m "Release $tag"
+git tag "$tag"
 
 if [ "$pushRelease" = true ]; then
   git push origin master
