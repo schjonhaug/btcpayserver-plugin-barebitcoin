@@ -190,7 +190,9 @@ Prepare a reproducible release tag with:
 ./pluginpacker.sh 2.0.1
 ```
 
-The script updates the plugin version, runs tests, commits the version bump, creates and pushes the release tag, optionally creates a local `.btcpay` package, and prints the Plugin Builder form values.
+The script updates the plugin version, runs tests, optionally creates a local `.btcpay` package, commits the version bump, creates the release tag, pushes master and the tag, and prints the Plugin Builder form values. Packaging runs before the commit, so a packaging failure leaves git untouched and the run can simply be repeated.
+
+The local package needs BTCPay Server sources. The tracked `submodules/btcpayserver` submodule and an adjacent `../btcpayserver` checkout are both found automatically; set `BTCPAYSERVER_DIR` for a checkout kept anywhere else, or pass `--no-package` to skip it. Plugin Builder builds the package from the tag either way.
 
 Create a new Plugin Builder build with:
 
