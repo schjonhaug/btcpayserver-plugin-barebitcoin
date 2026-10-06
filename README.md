@@ -74,7 +74,11 @@ Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). 
 
 This branch supports BTCPay Server `2.3.7` and newer at runtime.
 
-Release builds target BTCPay Server `2.3.9` through the tracked submodule so package builds stay free of BTCPay transitive dependency vulnerability warnings.
+Release builds target the BTCPay Server version the tracked submodule points at, currently `2.4.4`. Plugin Builder builds from that submodule, so its version decides which BTCPay transitive dependencies a release build reports.
+
+One such warning remains: `NU1902` for `Microsoft.Build.Tasks.Git` 8.0.0, reached through SourceLink as a build-time dependency with `PrivateAssets="All"`. It is not shipped in the plugin package, the 8.0.x line has no patched release, and upgrading it is BTCPay's call.
+
+Until the submodule moved to `2.4.4` there were also two `NU1903` warnings for `SSH.NET` 2025.1.0, which the v2.0.2 release build reported. Both advisories concern `ScpClient`, which neither this plugin nor BTCPay calls, and BTCPay dropped the dependency after `2.4.2`.
 
 Use one of these BTCPay Server source layouts:
 
@@ -207,13 +211,13 @@ Use the pre-release stage to install and test the plugin on your own BTCPay Serv
 
 The GitHub release alone does not publish the plugin to the public BTCPay plugin directory.
 
-Before building a release, keep the tracked `submodules/btcpayserver` checkout aligned with the BTCPay Server version used for warning-free release builds. Plugin Builder uses the submodule layout, so an outdated submodule can surface transitive BTCPay dependency warnings even when local adjacent-checkout builds are clean.
+Before building a release, check whether the tracked `submodules/btcpayserver` checkout is still the BTCPay Server version you want to build against. Plugin Builder uses the submodule layout, so an outdated submodule can surface transitive BTCPay dependency warnings even when local adjacent-checkout builds are clean.
 
-To update it, replace `v2.3.9` with the BTCPay Server version used for the release build target:
+To update it, replace `v2.4.4` with the BTCPay Server version used for the release build target:
 
 ```shell
 git submodule update --init submodules/btcpayserver
 git -C submodules/btcpayserver fetch --tags
-git -C submodules/btcpayserver checkout v2.3.9
+git -C submodules/btcpayserver checkout v2.4.4
 git add submodules/btcpayserver
 ```
