@@ -73,8 +73,8 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Theory]
-    [InlineData(10)]
     [InlineData(300)]
+    [InlineData(3_600)]
     public async Task CreateInvoice_IncompatibleProviderExpiryFailsWithoutTracking(int requestedExpirySeconds)
     {
         var invoiceService = new RecordingInvoiceService();
@@ -91,6 +91,104 @@ public class BareBitcoinInvoiceLifecycleTests
             TestContext.Current.CancellationToken));
 
         Assert.Contains("monitoring deadline", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(invoiceService.TrackCalls);
+    }
+
+    [Theory]
+    [InlineData(60, 60u)]
+    [InlineData(900, 900u)]
+    [InlineData(86_400, 86_400u)]
+    public void ToProviderExpirySeconds_ForwardsSupportedWindows(int seconds, uint expected) =>
+        Assert.Equal(
+            expected,
+            BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+    [Theory]
+    [InlineData(59.5, 60u)]
+    [InlineData(59.6, 60u)]
+    [InlineData(900.4, 900u)]
+    [InlineData(86_400.4, 86_400u)]
+    public void ToProviderExpirySeconds_RoundsSubSecondRemaindersToWholeSeconds(
+        double seconds,
+        uint expected) =>
+        Assert.Equal(
+            expected,
+            BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+    [Fact]
+    public void ToProviderExpirySeconds_RejectsMidpointAboveTheProviderMaximum()
+    {
+        // AwayFromZero sends 86_401s, which the provider would reject.
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(86_400.5)));
+
+        Assert.Contains("86401s invoice lifetime", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(59)]
+    [InlineData(86_401)]
+    public void ToProviderExpirySeconds_RejectsUnsupportedWindows(int seconds)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+        Assert.Contains($"{seconds}s invoice lifetime", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_ForwardsRequestedExpiryToProvider()
+    {
+        var handler = new RecordingResponseHandler(CreateResponse("expiry-id", AmountBearingBolt11));
+        var client = CreateClient(
+            handler,
+            new RecordingInvoiceService(),
+            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "expiry", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken);
+
+        var requestBody = JObject.Parse(Assert.Single(handler.RequestBodies));
+        Assert.Equal(60, requestBody.Value<int>("expirySeconds"));
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(59)]
+    public async Task CreateInvoice_ExpiryBelowProviderMinimumFailsWithoutRequest(int requestedExpirySeconds)
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var handler = new RecordingResponseHandler(CreateResponse("expiry-id", AmountBearingBolt11));
+        var client = CreateClient(handler, invoiceService);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(
+                LightMoney.Satoshis(250_000),
+                "too short",
+                TimeSpan.FromSeconds(requestedExpirySeconds)),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("at least", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(handler.RequestBodies);
+        Assert.Empty(invoiceService.TrackCalls);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_ExpiryAboveProviderMaximumFailsWithoutRequest()
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var handler = new RecordingResponseHandler(CreateResponse("expiry-id", AmountBearingBolt11));
+        var client = CreateClient(handler, invoiceService);
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "too long", TimeSpan.FromHours(25)),
+            TestContext.Current.CancellationToken));
+
+        Assert.Contains("at most", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Empty(handler.RequestBodies);
         Assert.Empty(invoiceService.TrackCalls);
     }
 
@@ -497,6 +595,22 @@ public class BareBitcoinInvoiceLifecycleTests
             HttpRequestMessage request,
             CancellationToken cancellationToken) =>
             Task.FromResult(JsonResponse(response));
+    }
+
+    private sealed class RecordingResponseHandler(string response) : HttpMessageHandler
+    {
+        private readonly ConcurrentQueue<string> _requestBodies = new();
+
+        public string[] RequestBodies => _requestBodies.ToArray();
+
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.Content is not null)
+                _requestBodies.Enqueue(await request.Content.ReadAsStringAsync(cancellationToken));
+            return JsonResponse(response);
+        }
     }
 
     private sealed class LifecycleProviderHandler(string invoiceId, string bolt11) : HttpMessageHandler

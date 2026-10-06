@@ -13,6 +13,8 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 **Receive-only Lightning integration** — You can receive sats into your Bare Bitcoin account through BTCPay Server. Sending sats from your Bare Bitcoin account through BTCPay Server, including refunds, is not supported.
 
+**Checkout expiry between 1 minute and 24 hours** — Bare Bitcoin creates invoices that stay payable for 60 seconds to 24 hours, and the plugin forwards the store's remaining checkout window rather than accepting a mismatched lifetime. Lightning payments fail outside that range. Keep the store invoice expiration at 2 minutes or more: a 1-minute expiration leaves less than 60 seconds once BTCPay has processed the checkout, which rejects the invoice intermittently.
+
 ## Tracked Invoice Migration
 
 Plugin versions that used the legacy flat tracked-invoice file, or schema version 2 account-scoped state, did not persist which BTCPay store owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.
@@ -188,7 +190,9 @@ Prepare a reproducible release tag with:
 ./pluginpacker.sh 2.0.1
 ```
 
-The script updates the plugin version, runs tests, commits the version bump, creates and pushes the release tag, optionally creates a local `.btcpay` package, and prints the Plugin Builder form values.
+The script updates the plugin version, runs tests, optionally creates a local `.btcpay` package, commits the version bump, creates the release tag, pushes master and the tag, and prints the Plugin Builder form values. Packaging runs before the commit, so a packaging failure leaves git untouched and the run can simply be repeated.
+
+The local package needs BTCPay Server sources. The tracked `submodules/btcpayserver` submodule and an adjacent `../btcpayserver` checkout are both found automatically; set `BTCPAYSERVER_DIR` for a checkout kept anywhere else, or pass `--no-package` to skip it. Plugin Builder builds the package from the tag either way.
 
 Create a new Plugin Builder build with:
 
