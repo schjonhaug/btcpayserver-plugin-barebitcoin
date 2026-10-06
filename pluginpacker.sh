@@ -1,6 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Every path below is relative to the repository root, so the script works the
+# same from any directory.
+repoRoot="$(git rev-parse --show-toplevel)"
+cd -- "$repoRoot"
+
 pluginDir="plugin"
 projectFile="$pluginDir/BTCPayServer.Plugins.BareBitcoin.csproj"
 fullName="BTCPayServer.Plugins.BareBitcoin"
@@ -150,7 +155,6 @@ echo "Preparing release $tag from current version $currentVersion"
 # worktree by then. Restoring it keeps the clean-worktree check meaningful, so
 # a failed run can be repeated once its cause is fixed.
 projectFileCommitted=false
-repoRoot="$(git rev-parse --show-toplevel)"
 restore_project_file() {
   if [ "$projectFileCommitted" = false ]; then
     # -C because packaging runs from $pluginDir, and HEAD because the bump may
@@ -158,7 +162,7 @@ restore_project_file() {
     git -C "$repoRoot" checkout HEAD -- "$projectFile"
   fi
 }
-trap restore_project_file EXIT
+trap restore_project_file EXIT INT TERM
 
 perl -0pi -e "s:<Version>[^<]+</Version>:<Version>$version</Version>:" "$projectFile"
 
@@ -171,7 +175,7 @@ if [ "$packageLocal" = true ]; then
   # The packer is built outside the BTCPay Server checkout. Building into it
   # leaves untracked output behind, which fails the clean-worktree check on the
   # next release when that checkout is the tracked submodule.
-  pluginPackerOut="$(pwd)/$pluginDir/tmp/pluginpacker"
+  pluginPackerOut="$repoRoot/$pluginDir/tmp/pluginpacker"
   rm -rf "$pluginPackerOut"
   dotnet build "$btcpayServerDir/BTCPayServer.PluginPacker/BTCPayServer.PluginPacker.csproj" \
     -c Release -o "$pluginPackerOut"
