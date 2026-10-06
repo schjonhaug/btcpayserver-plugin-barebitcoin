@@ -3,7 +3,8 @@ set -euo pipefail
 
 # Every path below is relative to the repository root, so the script works the
 # same from any directory.
-repoRoot="$(git rev-parse --show-toplevel)"
+scriptDir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" >/dev/null && pwd -P)"
+repoRoot="$(git -C "$scriptDir" rev-parse --show-toplevel)"
 cd -- "$repoRoot"
 
 pluginDir="plugin"
