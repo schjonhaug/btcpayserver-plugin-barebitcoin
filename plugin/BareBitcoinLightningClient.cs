@@ -508,14 +508,19 @@ public class BareBitcoinLightningClient : ILightningClient
     // a deadline. The response expiry is still validated against our own clock.
     internal static uint ToProviderExpirySeconds(TimeSpan expiry)
     {
-        if (expiry < MinimumProviderExpiry)
+        // The provider only accepts whole seconds, so the range is checked
+        // against the value actually sent. Monitoring windows are commonly
+        // derived from timestamp subtraction, and sub-second remainders must
+        // not reject a window the provider would have accepted.
+        var seconds = (long)Math.Round(expiry.TotalSeconds, MidpointRounding.AwayFromZero);
+        if (seconds < (long)MinimumProviderExpiry.TotalSeconds)
             throw new InvalidOperationException(
-                $"BTCPay requested a {expiry.TotalSeconds:0.###}s invoice lifetime, but Bare Bitcoin requires at least {MinimumProviderExpiry.TotalSeconds:0}s; a longer invoice would stay payable past the monitoring deadline");
-        if (expiry > MaximumProviderExpiry)
+                $"BTCPay requested a {seconds}s invoice lifetime, but Bare Bitcoin requires at least {(long)MinimumProviderExpiry.TotalSeconds}s; a longer invoice would stay payable past the monitoring deadline");
+        if (seconds > (long)MaximumProviderExpiry.TotalSeconds)
             throw new InvalidOperationException(
-                $"BTCPay requested a {expiry.TotalHours:0.###}h invoice lifetime, but Bare Bitcoin supports at most {MaximumProviderExpiry.TotalHours:0}h");
+                $"BTCPay requested a {seconds}s invoice lifetime, but Bare Bitcoin supports at most {(long)MaximumProviderExpiry.TotalSeconds}s");
 
-        return (uint)Math.Round(expiry.TotalSeconds, MidpointRounding.AwayFromZero);
+        return (uint)seconds;
     }
 
     private void ValidateCreatedInvoice(

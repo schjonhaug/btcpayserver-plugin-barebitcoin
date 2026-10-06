@@ -94,6 +94,39 @@ public class BareBitcoinInvoiceLifecycleTests
         Assert.Empty(invoiceService.TrackCalls);
     }
 
+    [Theory]
+    [InlineData(60, 60u)]
+    [InlineData(900, 900u)]
+    [InlineData(86_400, 86_400u)]
+    public void ToProviderExpirySeconds_ForwardsSupportedWindows(int seconds, uint expected) =>
+        Assert.Equal(
+            expected,
+            BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+    [Theory]
+    [InlineData(59.6, 60u)]
+    [InlineData(900.4, 900u)]
+    [InlineData(86_400.4, 86_400u)]
+    public void ToProviderExpirySeconds_RoundsSubSecondRemaindersToWholeSeconds(
+        double seconds,
+        uint expected) =>
+        Assert.Equal(
+            expected,
+            BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(0)]
+    [InlineData(59)]
+    [InlineData(86_401)]
+    public void ToProviderExpirySeconds_RejectsUnsupportedWindows(int seconds)
+    {
+        var exception = Assert.Throws<InvalidOperationException>(
+            () => BareBitcoinLightningClient.ToProviderExpirySeconds(TimeSpan.FromSeconds(seconds)));
+
+        Assert.Contains($"{seconds}s invoice lifetime", exception.Message, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task CreateInvoice_ForwardsRequestedExpiryToProvider()
     {
