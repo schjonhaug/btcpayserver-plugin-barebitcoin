@@ -1128,6 +1128,29 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Empty(hub.Subscribe(Scope, later));
     }
 
+    [Fact]
+    public void Hub_DropsHistoriesOfScopesNoLongerUsed()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var hub = new BareBitcoinListenerHub(time);
+        hub.RecordPaid(OtherScope, "inv-1", PaidInvoice("inv-1"));
+        Assert.Equal(1, hub.RecentlyPaidScopeCount);
+
+        // Activity on another scope only, after the lifetime has passed.
+        time.Advance(BareBitcoinListenerHub.RecentlyPaidLifetime + TimeSpan.FromSeconds(1));
+        hub.RecordPaid(Scope, "inv-2", PaidInvoice("inv-2"));
+
+        Assert.Equal(1, hub.RecentlyPaidScopeCount);
+
+        // A listener leaving after that lifetime too leaves no history behind.
+        time.Advance(BareBitcoinListenerHub.RecentlyPaidLifetime + TimeSpan.FromSeconds(1));
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        new BareBitcoinListener(client, invoiceService, OtherScope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub).Dispose();
+        Assert.Equal(0, hub.RecentlyPaidScopeCount);
+    }
+
     private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     {
         private DateTimeOffset _now = start;

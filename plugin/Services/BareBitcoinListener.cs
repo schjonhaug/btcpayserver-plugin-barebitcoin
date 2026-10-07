@@ -129,15 +129,23 @@ public class BareBitcoinListener : ILightningInvoiceListener
     {
         _logger.LogDebug("Starting invoice polling task");
 
-        // Invoices paid and untracked by other listeners of the scope just before this one joined.
-        try
+        // Invoices other listeners of the scope found paid just before this one joined. They were
+        // untracked or are about to be, so they go straight into the completed history.
+        foreach (var paid in recentlyPaid)
         {
-            foreach (var paid in recentlyPaid)
+            try
+            {
                 await Deliver(paid.InvoiceId, paid.Invoice, _cts.Token);
-        }
-        catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
-        {
-            return;
+                CompleteDelivered(paid.InvoiceId);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to deliver recently paid invoice {InvoiceId} to a newly joined listener", paid.InvoiceId);
+            }
         }
 
         while (!_cts.Token.IsCancellationRequested)
@@ -288,6 +296,12 @@ public class BareBitcoinListener : ILightningInvoiceListener
         }
     }
 
+    private bool IsDelivered(string invoiceId)
+    {
+        lock (_deliveredLock)
+            return _deliveredPaidInvoices.ContainsKey(invoiceId) || _completedPaidInvoices.ContainsKey(invoiceId);
+    }
+
     /// <summary>
     /// Moves the marker of a delivered invoice that is no longer tracked into the bounded completed history.
     /// </summary>
@@ -315,14 +329,16 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// </summary>
     private async Task Deliver(string invoiceId, LightningInvoice invoice, CancellationToken cancellation)
     {
+        // Checked before waiting for the channel too, so a full channel cannot make another listener
+        // time out over an invoice this one already has.
+        if (IsDelivered(invoiceId))
+            return;
+
         await _deliveryLock.WaitAsync(cancellation);
         try
         {
-            lock (_deliveredLock)
-            {
-                if (_deliveredPaidInvoices.ContainsKey(invoiceId) || _completedPaidInvoices.ContainsKey(invoiceId))
-                    return;
-            }
+            if (IsDelivered(invoiceId))
+                return;
 
             _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
             OnBeforeWrite?.Invoke(invoice);

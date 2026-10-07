@@ -51,13 +51,10 @@ public sealed class BareBitcoinListenerHub
             if (!listeners.Contains(listener))
                 listeners.Add(listener);
 
-            if (!_recentlyPaid.TryGetValue(scope, out var recent))
-                return Array.Empty<RecentlyPaid>();
-
-            PruneExpired(recent);
-            if (recent.Count == 0)
-                _recentlyPaid.Remove(scope);
-            return recent.ToArray();
+            PruneExpired();
+            return _recentlyPaid.TryGetValue(scope, out var recent)
+                ? recent.ToArray()
+                : Array.Empty<RecentlyPaid>();
         }
     }
 
@@ -69,13 +66,13 @@ public sealed class BareBitcoinListenerHub
     {
         lock (_lock)
         {
+            PruneExpired();
             if (!_recentlyPaid.TryGetValue(scope, out var recent))
             {
                 recent = new LinkedList<RecentlyPaid>();
                 _recentlyPaid[scope] = recent;
             }
 
-            PruneExpired(recent);
             if (!recent.Any(entry => entry.InvoiceId == invoiceId))
             {
                 if (recent.Count >= RecentlyPaidCapacity)
@@ -89,17 +86,40 @@ public sealed class BareBitcoinListenerHub
         }
     }
 
-    private void PruneExpired(LinkedList<RecentlyPaid> recent)
+    // Runs on every hub operation across all scopes, so histories of scopes that are never used again
+    // (a deleted store, a replaced connection) are dropped too. There are only a few scopes per server.
+    private void PruneExpired()
     {
         var cutoff = _timeProvider.GetUtcNow() - RecentlyPaidLifetime;
-        while (recent.First is { } oldest && oldest.Value.PaidSeenAt < cutoff)
-            recent.RemoveFirst();
+        List<BareBitcoinInvoiceScope>? emptied = null;
+        foreach (var (scope, recent) in _recentlyPaid)
+        {
+            while (recent.First is { } oldest && oldest.Value.PaidSeenAt < cutoff)
+                recent.RemoveFirst();
+            if (recent.Count == 0)
+                (emptied ??= new List<BareBitcoinInvoiceScope>()).Add(scope);
+        }
+
+        if (emptied is null)
+            return;
+        foreach (var scope in emptied)
+            _recentlyPaid.Remove(scope);
+    }
+
+    internal int RecentlyPaidScopeCount
+    {
+        get
+        {
+            lock (_lock)
+                return _recentlyPaid.Count;
+        }
     }
 
     internal void Unsubscribe(BareBitcoinInvoiceScope scope, BareBitcoinListener listener)
     {
         lock (_lock)
         {
+            PruneExpired();
             if (!_listeners.TryGetValue(scope, out var listeners))
                 return;
 
