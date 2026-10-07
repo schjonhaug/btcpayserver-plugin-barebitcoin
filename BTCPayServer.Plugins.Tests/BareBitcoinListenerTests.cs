@@ -1068,6 +1068,73 @@ public class BareBitcoinListenerTests : IDisposable
         }
     }
 
+    [Fact]
+    public async Task ListenerJoiningAfterTheDeliverySnapshot_ReceivesThePaymentWithoutPollingIt()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+        BareBitcoinListener? lateListener = null;
+
+        // The late listener joins after the early one took its snapshot of the scope, and its own polls
+        // never answer, so it can only learn about the payment from the hub.
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        var invoiceService = new BeforeUntrackInvoiceService(realService, () =>
+        {
+            lateListener ??= new BareBitcoinListener(
+                lateClient, realService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+            return Task.CompletedTask;
+        });
+        var earlyClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+
+        using var earlyListener = new BareBitcoinListener(
+            earlyClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+        try
+        {
+            using var cts = new CancellationTokenSource(TestTimeout);
+            Assert.Equal("inv-1", (await earlyListener.WaitInvoice(cts.Token)).Id);
+            await WaitUntilInvoiceIsUntracked(realService, "inv-1");
+            Assert.NotNull(lateListener);
+            Assert.Equal("inv-1", (await lateListener.WaitInvoice(cts.Token)).Id);
+        }
+        finally
+        {
+            lateListener?.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Hub_ForgetsPaidInvoicesAfterTheirLifetime()
+    {
+        var time = new ManualTimeProvider(DateTimeOffset.UnixEpoch);
+        var hub = new BareBitcoinListenerHub(time);
+        hub.RecordPaid(Scope, "inv-1", PaidInvoice("inv-1"));
+        hub.RecordPaid(Scope, "inv-1", PaidInvoice("inv-1"));
+
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var client = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        using (var listener = new BareBitcoinListener(client, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub))
+        {
+            Assert.Single(hub.Subscribe(Scope, listener));
+            Assert.Empty(hub.Subscribe(OtherScope, listener));
+            hub.Unsubscribe(OtherScope, listener);
+        }
+
+        time.Advance(BareBitcoinListenerHub.RecentlyPaidLifetime + TimeSpan.FromSeconds(1));
+        using var later = new BareBitcoinListener(client, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+        Assert.Empty(hub.Subscribe(Scope, later));
+    }
+
+    private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
+    {
+        private DateTimeOffset _now = start;
+        public override DateTimeOffset GetUtcNow() => _now;
+        public void Advance(TimeSpan by) => _now += by;
+    }
+
     private sealed class BeforeUntrackInvoiceService(IBareBitcoinInvoiceService inner, Func<Task> beforeUntrack) : IBareBitcoinInvoiceService
     {
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)

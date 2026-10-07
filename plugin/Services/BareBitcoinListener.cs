@@ -112,10 +112,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
         });
 
         // Join the scope before polling so paid invoices found by other listeners reach this one too
-        _listenerHub.Subscribe(_invoiceScope, this);
+        var recentlyPaid = _listenerHub.Subscribe(_invoiceScope, this);
 
         // Start the polling task immediately
-        _pollingTask = StartPolling();
+        _pollingTask = StartPolling(recentlyPaid);
     }
 
     /// <summary>
@@ -125,9 +125,20 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// 2. Checks each tracked invoice for updates
     /// 3. Notifies of any detected payments via the channel
     /// </summary>
-    private async Task StartPolling()
+    private async Task StartPolling(IReadOnlyList<BareBitcoinListenerHub.RecentlyPaid> recentlyPaid)
     {
         _logger.LogDebug("Starting invoice polling task");
+
+        // Invoices paid and untracked by other listeners of the scope just before this one joined.
+        try
+        {
+            foreach (var paid in recentlyPaid)
+                await Deliver(paid.InvoiceId, paid.Invoice, _cts.Token);
+        }
+        catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
+        {
+            return;
+        }
 
         while (!_cts.Token.IsCancellationRequested)
         {
@@ -187,8 +198,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         // Only BTCPay knows which listener of this scope waits for the invoice, so it is
                         // offered to every live listener before it is untracked. Each one delivers it once.
                         // Its own channel is not held up waiting on the others. Only the listeners it was
-                        // offered to are marked complete: one that joins meanwhile must still deliver it itself.
-                        var peers = _listenerHub.GetListeners(_invoiceScope)
+                        // offered to are marked complete; one that joins meanwhile gets it from the hub instead.
+                        var peers = _listenerHub.RecordPaid(_invoiceScope, invoiceId, invoice)
                             .Where(peer => !ReferenceEquals(peer, this))
                             .ToArray();
                         var deliveredToPeers = DeliverToPeers(invoiceId, invoice, peers, stalledPeers);
