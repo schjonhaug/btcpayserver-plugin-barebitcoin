@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Channels;
@@ -21,6 +22,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private readonly ILightningClient _lightningClient;
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly BareBitcoinInvoiceScope _invoiceScope;
+    private readonly BareBitcoinListenerHub _listenerHub;
 
     // Channel for communicating paid invoices back to BTCPay Server
     // Uses a bounded channel with a capacity of 100 to prevent memory issues
@@ -28,17 +30,32 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     // Cancellation and task management
     private readonly CancellationTokenSource _cts;
+    private readonly CancellationToken _lifetime;
     private readonly Task _pollingTask;
     private readonly ILogger _logger;
     private readonly LogThrottle _persistenceWarningThrottle;
 
-    // Guards against duplicate paid invoice delivery when UntrackInvoice fails.
+    // Guards against duplicate paid invoice delivery when UntrackInvoice fails or when several
+    // listeners of the same scope offer the same paid invoice.
     // LinkedList tracks insertion order for FIFO eviction; Dictionary provides O(1) lookup and removal.
     private readonly LinkedList<string> _deliveredPaidInvoicesOrder = new();
     private readonly Dictionary<string, LinkedListNode<string>> _deliveredPaidInvoices = new();
+    private readonly object _deliveredLock = new();
     private readonly int _maxDeliveredCapacity;
 
-    private bool _isDisposed;
+    // Invoices already untracked keep a marker in a separate bounded history: another listener may still
+    // offer one it fetched before the untrack, and they must not evict markers of invoices still pending.
+    private readonly LinkedList<string> _completedPaidInvoicesOrder = new();
+    private readonly Dictionary<string, LinkedListNode<string>> _completedPaidInvoices = new();
+
+    // Serializes writes to this listener's channel, since other listeners of the scope deliver into it too.
+    private readonly SemaphoreSlim _deliveryLock = new(1, 1);
+
+    // Bounds how long another listener waits on this listener's full channel before retrying next cycle.
+    private static readonly TimeSpan DefaultPeerDeliveryTimeout = TimeSpan.FromSeconds(5);
+    private readonly TimeSpan _peerDeliveryTimeout;
+
+    private volatile bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
     private readonly int _maxPollConcurrency;
@@ -62,10 +79,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Initializes a new instance of the BareBitcoinListener.
     /// Sets up the bounded channel and starts the polling task.
     /// </summary>
-    public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int maxPollConcurrency = 10)
-        : this(lightningClient, invoiceService, invoiceScope, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency) { }
+    public BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int maxPollConcurrency = 10, BareBitcoinListenerHub? listenerHub = null)
+        : this(lightningClient, invoiceService, invoiceScope, logger, channelCapacity: 100, maxPollConcurrency: maxPollConcurrency, listenerHub: listenerHub) { }
 
-    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, int maxDeliveredCapacity = 10_000, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null)
+    internal BareBitcoinListener(ILightningClient lightningClient, IBareBitcoinInvoiceService invoiceService, BareBitcoinInvoiceScope invoiceScope, ILogger logger, int channelCapacity, int maxPollConcurrency = 10, int maxDeliveredCapacity = 10_000, Action<LightningInvoice>? onBeforeWrite = null, Action<LightningInvoice>? onAfterWrite = null, Action? onPollCycleCompleted = null, BareBitcoinListenerHub? listenerHub = null, TimeSpan? peerDeliveryTimeout = null)
     {
         if (channelCapacity <= 0) throw new ArgumentOutOfRangeException(nameof(channelCapacity));
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
@@ -74,11 +91,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
         _lightningClient = lightningClient;
         _invoiceService = invoiceService;
         _invoiceScope = invoiceScope;
+        _listenerHub = listenerHub ?? new BareBitcoinListenerHub();
+        _peerDeliveryTimeout = peerDeliveryTimeout ?? DefaultPeerDeliveryTimeout;
         _logger = logger;
         _maxPollConcurrency = maxPollConcurrency;
         _maxDeliveredCapacity = maxDeliveredCapacity;
         _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _cts = new CancellationTokenSource();
+        _lifetime = _cts.Token;
         OnBeforeWrite = onBeforeWrite;
         OnAfterWrite = onAfterWrite;
         OnPollCycleCompleted = onPollCycleCompleted;
@@ -91,8 +111,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
             FullMode = BoundedChannelFullMode.Wait
         });
 
+        // Join the scope before polling so paid invoices found by other listeners reach this one too
+        var recentlyPaid = _listenerHub.Subscribe(_invoiceScope, this);
+
         // Start the polling task immediately
-        _pollingTask = StartPolling();
+        _pollingTask = StartPolling(recentlyPaid);
     }
 
     /// <summary>
@@ -102,9 +125,29 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// 2. Checks each tracked invoice for updates
     /// 3. Notifies of any detected payments via the channel
     /// </summary>
-    private async Task StartPolling()
+    private async Task StartPolling(IReadOnlyList<BareBitcoinListenerHub.RecentlyPaid> recentlyPaid)
     {
         _logger.LogDebug("Starting invoice polling task");
+
+        // Invoices other listeners of the scope found paid just before this one joined. One that is still
+        // tracked keeps a pending marker until it is untracked, so later payments cannot evict it.
+        foreach (var paid in recentlyPaid)
+        {
+            try
+            {
+                await Deliver(paid.InvoiceId, paid.Invoice, _cts.Token);
+                if (paid.Untracked)
+                    CompleteDelivered(paid.InvoiceId);
+            }
+            catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
+            {
+                return;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to deliver recently paid invoice {InvoiceId} to a newly joined listener", paid.InvoiceId);
+            }
+        }
 
         while (!_cts.Token.IsCancellationRequested)
         {
@@ -143,6 +186,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     }
                 });
 
+                // Listeners that did not take a notification in time are skipped for the rest of the
+                // cycle, so one stalled listener costs a cycle at most one timeout, not one per invoice.
+                var stalledPeers = new HashSet<BareBitcoinListener>();
+
                 // Process results sequentially
                 foreach (var (invoiceId, invoice) in results)
                 {
@@ -157,33 +204,26 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     _logger.LogDebug("Invoice {InvoiceId} status: {Status}", invoiceId, invoice.Status);
                     if (invoice.Status == LightningInvoiceStatus.Paid)
                     {
-                        if (!_deliveredPaidInvoices.ContainsKey(invoiceId))
-                        {
-                            _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
-                            OnBeforeWrite?.Invoke(invoice);
-                            await _invoices.Writer.WriteAsync(invoice, _cts.Token);
-                            OnAfterWrite?.Invoke(invoice);
-                            if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
-                            {
-                                var target = Math.Max(1, _maxDeliveredCapacity / 10);
-                                var evicted = 0;
-                                for (; evicted < target && _deliveredPaidInvoicesOrder.First != null; evicted++)
-                                {
-                                    var oldest = _deliveredPaidInvoicesOrder.First!;
-                                    _deliveredPaidInvoices.Remove(oldest.Value);
-                                    _deliveredPaidInvoicesOrder.RemoveFirst();
-                                }
-
-                                _logger.LogDebug(
-                                    "Evicted {EvictedCount} oldest entries from delivered paid invoices set (capacity: {Capacity})",
-                                    evicted, _maxDeliveredCapacity);
-                            }
-
-                            var node = _deliveredPaidInvoicesOrder.AddLast(invoiceId);
-                            _deliveredPaidInvoices[invoiceId] = node;
-                        }
+                        // Only BTCPay knows which listener of this scope waits for the invoice, so it is
+                        // offered to every live listener before it is untracked. Each one delivers it once.
+                        // Its own channel is not held up waiting on the others. Only the listeners it was
+                        // offered to are marked complete; one that joins meanwhile gets it from the hub instead.
+                        var peers = _listenerHub.RecordPaid(_invoiceScope, invoiceId, invoice)
+                            .Where(peer => !ReferenceEquals(peer, this))
+                            .ToArray();
+                        var deliveredToPeers = DeliverToPeers(invoiceId, invoice, peers, stalledPeers);
+                        await Task.WhenAll(deliveredToPeers, Deliver(invoiceId, invoice, _cts.Token));
+                        if (!await deliveredToPeers)
+                            continue;
                         if (await TryUntrackInvoice(invoiceId))
-                            RemoveDeliveredInvoice(invoiceId);
+                        {
+                            // A listener that joined since only completes the invoice if it delivered it.
+                            foreach (var listener in _listenerHub.MarkUntracked(_invoiceScope, invoiceId))
+                                listener.CompleteDelivered(invoiceId, onlyIfDelivered: true);
+                            foreach (var peer in peers)
+                                peer.CompleteDelivered(invoiceId);
+                            CompleteDelivered(invoiceId);
+                        }
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
@@ -253,8 +293,163 @@ public class BareBitcoinListener : ILightningInvoiceListener
 
     private void RemoveDeliveredInvoice(string invoiceId)
     {
-        if (_deliveredPaidInvoices.Remove(invoiceId, out var node))
-            _deliveredPaidInvoicesOrder.Remove(node);
+        lock (_deliveredLock)
+        {
+            if (_deliveredPaidInvoices.Remove(invoiceId, out var node))
+                _deliveredPaidInvoicesOrder.Remove(node);
+        }
+    }
+
+    private bool IsDelivered(string invoiceId)
+    {
+        lock (_deliveredLock)
+            return _deliveredPaidInvoices.ContainsKey(invoiceId) || _completedPaidInvoices.ContainsKey(invoiceId);
+    }
+
+    /// <summary>
+    /// Moves the marker of a delivered invoice that is no longer tracked into the bounded completed history.
+    /// </summary>
+    private void CompleteDelivered(string invoiceId, bool onlyIfDelivered = false)
+    {
+        lock (_deliveredLock)
+        {
+            if (_deliveredPaidInvoices.Remove(invoiceId, out var pending))
+                _deliveredPaidInvoicesOrder.Remove(pending);
+            else if (onlyIfDelivered)
+                return;
+            if (_completedPaidInvoices.ContainsKey(invoiceId))
+                return;
+
+            if (_completedPaidInvoices.Count >= _maxDeliveredCapacity && _completedPaidInvoicesOrder.First is { } oldest)
+            {
+                _completedPaidInvoices.Remove(oldest.Value);
+                _completedPaidInvoicesOrder.RemoveFirst();
+            }
+
+            _completedPaidInvoices[invoiceId] = _completedPaidInvoicesOrder.AddLast(invoiceId);
+        }
+    }
+
+    /// <summary>
+    /// Writes a paid invoice to this listener's channel unless it was already delivered.
+    /// </summary>
+    private async Task Deliver(string invoiceId, LightningInvoice invoice, CancellationToken cancellation)
+    {
+        // Checked before waiting for the channel too, so a full channel cannot make another listener
+        // time out over an invoice this one already has.
+        if (IsDelivered(invoiceId))
+            return;
+
+        await _deliveryLock.WaitAsync(cancellation);
+        try
+        {
+            if (IsDelivered(invoiceId))
+                return;
+
+            _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoiceId);
+            OnBeforeWrite?.Invoke(invoice);
+            await _invoices.Writer.WriteAsync(invoice, cancellation);
+            OnAfterWrite?.Invoke(invoice);
+            RecordDelivered(invoiceId);
+        }
+        finally
+        {
+            _deliveryLock.Release();
+        }
+    }
+
+    private void RecordDelivered(string invoiceId)
+    {
+        lock (_deliveredLock)
+        {
+            if (_deliveredPaidInvoices.Count >= _maxDeliveredCapacity)
+            {
+                var target = Math.Max(1, _maxDeliveredCapacity / 10);
+                var evicted = 0;
+                for (; evicted < target && _deliveredPaidInvoicesOrder.First != null; evicted++)
+                {
+                    var oldest = _deliveredPaidInvoicesOrder.First!;
+                    _deliveredPaidInvoices.Remove(oldest.Value);
+                    _deliveredPaidInvoicesOrder.RemoveFirst();
+                }
+
+                _logger.LogDebug(
+                    "Evicted {EvictedCount} oldest entries from delivered paid invoices set (capacity: {Capacity})",
+                    evicted, _maxDeliveredCapacity);
+            }
+
+            var node = _deliveredPaidInvoicesOrder.AddLast(invoiceId);
+            _deliveredPaidInvoices[invoiceId] = node;
+        }
+    }
+
+    /// <summary>
+    /// Offers a paid invoice to every other live listener of this scope.
+    /// Returns false when a listener could not take it yet, so the invoice stays tracked and is offered again.
+    /// </summary>
+    private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice, BareBitcoinListener[] peers, HashSet<BareBitcoinListener> stalledPeers)
+    {
+        if (peers.Length == 0)
+            return true;
+
+        // A listener that already stalled this cycle is not waited on again; the invoice stays tracked.
+        var deliverable = peers.Where(peer => !stalledPeers.Contains(peer)).ToArray();
+
+        // Offered concurrently, so a slow listener delays the invoice by at most one timeout.
+        var delivered = await Task.WhenAll(deliverable.Select(peer => peer.DeliverFromPeer(invoiceId, invoice, _cts.Token)));
+        for (var i = 0; i < deliverable.Length; i++)
+        {
+            if (!delivered[i])
+                stalledPeers.Add(deliverable[i]);
+        }
+
+        return deliverable.Length == peers.Length && delivered.All(accepted => accepted);
+    }
+
+    private async Task<bool> DeliverFromPeer(string invoiceId, LightningInvoice invoice, CancellationToken peerCancellation)
+    {
+        // A disposed listener has no consumer left, so there is nothing to deliver to.
+        if (_isDisposed || _lifetime.IsCancellationRequested)
+            return true;
+
+        CancellationTokenSource linked;
+        try
+        {
+            linked = CancellationTokenSource.CreateLinkedTokenSource(peerCancellation, _lifetime);
+        }
+        catch (ObjectDisposedException)
+        {
+            return true;
+        }
+
+        using (linked)
+        {
+            linked.CancelAfter(_peerDeliveryTimeout);
+            try
+            {
+                await Deliver(invoiceId, invoice, linked.Token);
+                return true;
+            }
+            catch (ChannelClosedException)
+            {
+                return true;
+            }
+            catch (OperationCanceledException) when (peerCancellation.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            {
+                return true;
+            }
+            catch (OperationCanceledException)
+            {
+                _logger.LogWarning(
+                    "Listener for invoice {InvoiceId} did not accept the payment notification within {Timeout}s, keeping the invoice tracked",
+                    invoiceId, _peerDeliveryTimeout.TotalSeconds);
+                return false;
+            }
+        }
     }
 
     private async Task<bool> TryUntrackInvoice(string invoiceId)
@@ -281,6 +476,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
             return;
 
         _logger.LogDebug("Disposing listener");
+        _listenerHub.Unsubscribe(_invoiceScope, this);
         _cts.Cancel();
         try
         {

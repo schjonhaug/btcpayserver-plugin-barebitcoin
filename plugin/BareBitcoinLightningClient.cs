@@ -32,6 +32,7 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly BareBitcoinBalanceService _balanceService;
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly BareBitcoinInvoiceScope _invoiceScope;
+    private readonly BareBitcoinListenerHub _listenerHub;
     private readonly TimeProvider _timeProvider;
     private readonly int _maxPollConcurrency;
     private readonly int _maxRetries;
@@ -50,7 +51,7 @@ public class BareBitcoinLightningClient : ILightningClient
     internal static readonly TimeSpan MinimumProviderExpiry = TimeSpan.FromSeconds(60);
     internal static readonly TimeSpan MaximumProviderExpiry = TimeSpan.FromHours(24);
 
-    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, string storeId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null)
+    public BareBitcoinLightningClient(string privateKey, string publicKey, string accountId, string storeId, Uri apiEndpoint, Network network, HttpClient httpClient, ILogger logger, IBareBitcoinInvoiceService invoiceService, int maxPollConcurrency = 10, int maxRetries = 3, TimeProvider? timeProvider = null, BareBitcoinListenerHub? listenerHub = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(accountId);
         ArgumentException.ThrowIfNullOrWhiteSpace(storeId);
@@ -64,6 +65,7 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger = logger;
         _invoiceService = invoiceService;
         _invoiceScope = BareBitcoinInvoiceScope.ForStoreConnection(apiEndpoint, network, _accountId, _storeId);
+        _listenerHub = listenerHub ?? new BareBitcoinListenerHub();
         _timeProvider = timeProvider ?? TimeProvider.System;
         if (maxPollConcurrency is < 1 or > 100) throw new ArgumentOutOfRangeException(nameof(maxPollConcurrency));
         _maxPollConcurrency = maxPollConcurrency;
@@ -594,7 +596,7 @@ public class BareBitcoinLightningClient : ILightningClient
             }
 
             Logger.LogInformation("Creating new listener");
-            _currentListener = new BareBitcoinListener(this, _invoiceService, _invoiceScope, Logger, maxPollConcurrency: _maxPollConcurrency);
+            _currentListener = new BareBitcoinListener(this, _invoiceService, _invoiceScope, Logger, maxPollConcurrency: _maxPollConcurrency, listenerHub: _listenerHub);
             return _currentListener;
         }
         finally

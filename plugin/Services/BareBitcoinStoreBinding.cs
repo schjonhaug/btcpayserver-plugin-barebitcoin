@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Security.Cryptography;
+using BTCPayServer.Lightning;
 using Microsoft.AspNetCore.DataProtection;
 
 namespace BTCPayServer.Plugins.BareBitcoin.Services;
@@ -31,6 +32,36 @@ public sealed class BareBitcoinStoreBinding : IBareBitcoinStoreBinding
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(storeId);
         return _protector.Protect(storeId.Trim());
+    }
+
+    /// <summary>
+    /// Returns the binding to put in the store's Lightning setup. A still-valid binding from the existing
+    /// connection string is kept: data protection output is randomized, and a new binding would change the
+    /// connection string on every save, making BTCPay start a second listener for the same store.
+    /// </summary>
+    public static string ForSetup(IBareBitcoinStoreBinding binding, string storeId, string? existingConnectionString)
+    {
+        ArgumentNullException.ThrowIfNull(binding);
+        ArgumentException.ThrowIfNullOrWhiteSpace(storeId);
+
+        if (!string.IsNullOrWhiteSpace(existingConnectionString))
+        {
+            try
+            {
+                var values = LightningConnectionStringHelper.ExtractValues(existingConnectionString, out var type);
+                if (type == "barebitcoin" &&
+                    values.TryGetValue("store-binding", out var existingBinding) &&
+                    binding.IsValid(storeId, existingBinding))
+                {
+                    return existingBinding.Trim();
+                }
+            }
+            catch (FormatException)
+            {
+            }
+        }
+
+        return binding.Protect(storeId);
     }
 
     public bool IsValid(string storeId, string protectedStoreId)
