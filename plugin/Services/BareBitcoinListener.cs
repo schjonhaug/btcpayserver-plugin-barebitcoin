@@ -161,6 +161,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     }
                 });
 
+                // Listeners that did not take a notification in time are skipped for the rest of the
+                // cycle, so one stalled listener costs a cycle at most one timeout, not one per invoice.
+                var stalledPeers = new HashSet<BareBitcoinListener>();
+
                 // Process results sequentially
                 foreach (var (invoiceId, invoice) in results)
                 {
@@ -179,9 +183,10 @@ public class BareBitcoinListener : ILightningInvoiceListener
                         // offered to every live listener before it is untracked. Each one delivers it once.
                         // The delivery marker is kept after untracking: another listener may still be
                         // processing a result it fetched before the untrack, and offer the invoice again.
-                        var deliveredToPeers = await DeliverToPeers(invoiceId, invoice);
-                        await Deliver(invoiceId, invoice, _cts.Token);
-                        if (!deliveredToPeers)
+                        // Its own channel is not held up waiting on the others.
+                        var deliveredToPeers = DeliverToPeers(invoiceId, invoice, stalledPeers);
+                        await Task.WhenAll(deliveredToPeers, Deliver(invoiceId, invoice, _cts.Token));
+                        if (!await deliveredToPeers)
                             continue;
                         await TryUntrackInvoice(invoiceId);
                     }
@@ -315,7 +320,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Offers a paid invoice to every other live listener of this scope.
     /// Returns false when a listener could not take it yet, so the invoice stays tracked and is offered again.
     /// </summary>
-    private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice)
+    private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice, HashSet<BareBitcoinListener> stalledPeers)
     {
         var peers = _listenerHub.GetListeners(_invoiceScope)
             .Where(peer => !ReferenceEquals(peer, this))
@@ -323,9 +328,18 @@ public class BareBitcoinListener : ILightningInvoiceListener
         if (peers.Length == 0)
             return true;
 
+        // A listener that already stalled this cycle is not waited on again; the invoice stays tracked.
+        var deliverable = peers.Where(peer => !stalledPeers.Contains(peer)).ToArray();
+
         // Offered concurrently, so a slow listener delays the invoice by at most one timeout.
-        var delivered = await Task.WhenAll(peers.Select(peer => peer.DeliverFromPeer(invoiceId, invoice, _cts.Token)));
-        return delivered.All(accepted => accepted);
+        var delivered = await Task.WhenAll(deliverable.Select(peer => peer.DeliverFromPeer(invoiceId, invoice, _cts.Token)));
+        for (var i = 0; i < deliverable.Length; i++)
+        {
+            if (!delivered[i])
+                stalledPeers.Add(deliverable[i]);
+        }
+
+        return deliverable.Length == peers.Length && delivered.All(accepted => accepted);
     }
 
     private async Task<bool> DeliverFromPeer(string invoiceId, LightningInvoice invoice, CancellationToken peerCancellation)

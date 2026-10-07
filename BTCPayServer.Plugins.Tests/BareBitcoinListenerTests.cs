@@ -236,6 +236,40 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
+    public async Task StalledListener_DelaysAPollCycleByAtMostOneTimeout()
+    {
+        const int invoiceCount = 10;
+        var peerDeliveryTimeout = TimeSpan.FromMilliseconds(500);
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        for (var i = 0; i < invoiceCount; i++)
+            await invoiceService.TrackInvoice(Scope, $"inv-{i}", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+
+        // A listener whose consumer stopped reading: one notification fills its channel.
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var stalledClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        using var stalledListener = new BareBitcoinListener(
+            stalledClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 1, listenerHub: hub,
+            peerDeliveryTimeout: peerDeliveryTimeout);
+
+        var pollingClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        using var pollingListener = new BareBitcoinListener(
+            pollingClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: invoiceCount, listenerHub: hub);
+
+        // Every paid invoice reaches the polling listener's own consumer within about one timeout,
+        // not one timeout per invoice.
+        using var cts = new CancellationTokenSource(peerDeliveryTimeout * 4);
+        var delivered = new HashSet<string>();
+        for (var i = 0; i < invoiceCount; i++)
+            delivered.Add((await pollingListener.WaitInvoice(cts.Token)).Id);
+        Assert.Equal(invoiceCount, delivered.Count);
+
+        // The invoices the stalled listener did not take stay tracked for it.
+        Assert.Equal(invoiceCount - 1, (await invoiceService.GetTrackedInvoices(Scope, TestContext.Current.CancellationToken)).Count);
+    }
+
+    [Fact]
     public async Task DisposedListener_DoesNotHoldBackOrConsumeDeliveries()
     {
         await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
