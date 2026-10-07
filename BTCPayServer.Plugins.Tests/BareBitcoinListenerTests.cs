@@ -1151,6 +1151,47 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Equal(0, hub.RecentlyPaidScopeCount);
     }
 
+    [Fact]
+    public async Task ReplayedInvoiceStillTracked_KeepsItsMarkerWhileOtherPaymentsComplete()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice(Scope, "inv-stuck", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+
+        // inv-stuck stays tracked because its untrack keeps failing; the others complete normally.
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-stuck");
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        var pollCycles = 0;
+        using var earlyListener = new BareBitcoinListener(
+            client, faultyService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub,
+            onPollCycleCompleted: () => Interlocked.Increment(ref pollCycles));
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-stuck", (await earlyListener.WaitInvoice(cts.Token)).Id);
+
+        // A listener joining now gets inv-stuck from the hub, then receives more payments than its marker
+        // capacity from the early listener. Its own polls never answer, so it only learns of them one by one.
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var lateClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        using var lateListener = new BareBitcoinListener(
+            lateClient, faultyService, Scope, NullLogger.Instance, channelCapacity: 10, maxDeliveredCapacity: 2,
+            listenerHub: hub);
+        Assert.Equal("inv-stuck", (await lateListener.WaitInvoice(cts.Token)).Id);
+
+        foreach (var invoiceId in new[] { "inv-1", "inv-2", "inv-3", "inv-4" })
+            await realService.TrackInvoice(Scope, invoiceId, TestContext.Current.CancellationToken);
+        var delivered = new List<string>();
+        for (var i = 0; i < 4; i++)
+            delivered.Add((await lateListener.WaitInvoice(cts.Token)).Id);
+        Assert.Equal(new[] { "inv-1", "inv-2", "inv-3", "inv-4" }, delivered.OrderBy(id => id).ToArray());
+
+        // The early listener keeps finding inv-stuck paid and offering it; the late one must not deliver it again.
+        var cyclesAfterDelivery = Volatile.Read(ref pollCycles);
+        await WaitUntil(() => Volatile.Read(ref pollCycles) >= cyclesAfterDelivery + 2, cts.Token);
+        using var shortCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => lateListener.WaitInvoice(shortCts.Token));
+    }
+
     private sealed class ManualTimeProvider(DateTimeOffset start) : TimeProvider
     {
         private DateTimeOffset _now = start;

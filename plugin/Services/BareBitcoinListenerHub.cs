@@ -32,7 +32,7 @@ public sealed class BareBitcoinListenerHub
         _timeProvider = timeProvider;
     }
 
-    internal readonly record struct RecentlyPaid(string InvoiceId, LightningInvoice Invoice, DateTimeOffset PaidSeenAt);
+    internal readonly record struct RecentlyPaid(string InvoiceId, LightningInvoice Invoice, DateTimeOffset PaidSeenAt, bool Untracked = false);
 
     /// <summary>
     /// Adds the listener to its scope and returns the scope's recently paid invoices, which it must deliver too.
@@ -78,6 +78,29 @@ public sealed class BareBitcoinListenerHub
                 if (recent.Count >= RecentlyPaidCapacity)
                     recent.RemoveFirst();
                 recent.AddLast(new RecentlyPaid(invoiceId, invoice, _timeProvider.GetUtcNow()));
+            }
+
+            return _listeners.TryGetValue(scope, out var listeners)
+                ? listeners.ToArray()
+                : Array.Empty<BareBitcoinListener>();
+        }
+    }
+
+    /// <summary>
+    /// Records that a paid invoice was untracked and returns the scope's current listeners, so those that
+    /// delivered it can move it to their completed history.
+    /// </summary>
+    internal IReadOnlyList<BareBitcoinListener> MarkUntracked(BareBitcoinInvoiceScope scope, string invoiceId)
+    {
+        lock (_lock)
+        {
+            if (_recentlyPaid.TryGetValue(scope, out var recent))
+            {
+                for (var node = recent.First; node is not null; node = node.Next)
+                {
+                    if (node.Value.InvoiceId == invoiceId)
+                        node.Value = node.Value with { Untracked = true };
+                }
             }
 
             return _listeners.TryGetValue(scope, out var listeners)

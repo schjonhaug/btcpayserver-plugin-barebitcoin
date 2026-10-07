@@ -129,14 +129,15 @@ public class BareBitcoinListener : ILightningInvoiceListener
     {
         _logger.LogDebug("Starting invoice polling task");
 
-        // Invoices other listeners of the scope found paid just before this one joined. They were
-        // untracked or are about to be, so they go straight into the completed history.
+        // Invoices other listeners of the scope found paid just before this one joined. One that is still
+        // tracked keeps a pending marker until it is untracked, so later payments cannot evict it.
         foreach (var paid in recentlyPaid)
         {
             try
             {
                 await Deliver(paid.InvoiceId, paid.Invoice, _cts.Token);
-                CompleteDelivered(paid.InvoiceId);
+                if (paid.Untracked)
+                    CompleteDelivered(paid.InvoiceId);
             }
             catch (Exception ex) when (ex is OperationCanceledException or ChannelClosedException)
             {
@@ -216,6 +217,9 @@ public class BareBitcoinListener : ILightningInvoiceListener
                             continue;
                         if (await TryUntrackInvoice(invoiceId))
                         {
+                            // A listener that joined since only completes the invoice if it delivered it.
+                            foreach (var listener in _listenerHub.MarkUntracked(_invoiceScope, invoiceId))
+                                listener.CompleteDelivered(invoiceId, onlyIfDelivered: true);
                             foreach (var peer in peers)
                                 peer.CompleteDelivered(invoiceId);
                             CompleteDelivered(invoiceId);
@@ -305,12 +309,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// <summary>
     /// Moves the marker of a delivered invoice that is no longer tracked into the bounded completed history.
     /// </summary>
-    private void CompleteDelivered(string invoiceId)
+    private void CompleteDelivered(string invoiceId, bool onlyIfDelivered = false)
     {
         lock (_deliveredLock)
         {
             if (_deliveredPaidInvoices.Remove(invoiceId, out var pending))
                 _deliveredPaidInvoicesOrder.Remove(pending);
+            else if (onlyIfDelivered)
+                return;
             if (_completedPaidInvoices.ContainsKey(invoiceId))
                 return;
 
@@ -340,7 +346,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
             if (IsDelivered(invoiceId))
                 return;
 
-            _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoice.Id);
+            _logger.LogInformation("Invoice {InvoiceId} has been paid, writing to channel", invoiceId);
             OnBeforeWrite?.Invoke(invoice);
             await _invoices.Writer.WriteAsync(invoice, cancellation);
             OnAfterWrite?.Invoke(invoice);
