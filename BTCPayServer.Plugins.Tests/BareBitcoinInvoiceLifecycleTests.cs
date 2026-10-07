@@ -201,7 +201,7 @@ public class BareBitcoinInvoiceLifecycleTests
     {
         const string accountId = "fallback-owner";
         var invoiceService = new RecordingInvoiceService();
-        var response = new JObject { ["invoice"] = AmountlessBolt11 };
+        var response = new JObject { ["invoice"] = AmountBearingBolt11 };
         if (providerId is not null)
             response["depositDestinationId"] = providerId;
 
@@ -209,19 +209,19 @@ public class BareBitcoinInvoiceLifecycleTests
             new StaticResponseHandler(response.ToString(Formatting.None)),
             invoiceService,
             accountId,
-            AtInvoiceTimestamp(AmountlessBolt11));
-        var paymentHash = Parse(AmountlessBolt11).PaymentHash!.ToString();
+            AtInvoiceTimestamp(AmountBearingBolt11));
+        var paymentHash = Parse(AmountBearingBolt11).PaymentHash!.ToString();
 
         var invoice = await client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Zero, "fallback", TimeSpan.FromHours(1)),
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "fallback", TimeSpan.FromMinutes(1)),
             TestContext.Current.CancellationToken);
 
         var scope = Scope(accountId);
-        Assert.Equal(AmountlessBolt11, invoice.Id);
+        Assert.Equal(AmountBearingBolt11, invoice.Id);
         Assert.Equal(paymentHash, invoice.PaymentHash);
-        Assert.Equal([AmountlessBolt11], await invoiceService.GetTrackedInvoices(
+        Assert.Equal([AmountBearingBolt11], await invoiceService.GetTrackedInvoices(
             scope, TestContext.Current.CancellationToken));
-        Assert.Equal(new ScopedInvoiceCall(scope, AmountlessBolt11), Assert.Single(invoiceService.TrackCalls));
+        Assert.Equal(new ScopedInvoiceCall(scope, AmountBearingBolt11), Assert.Single(invoiceService.TrackCalls));
     }
 
     [Fact]
@@ -242,20 +242,67 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
-    public async Task CreateInvoice_AmountBearingBolt11ForTopUpFailsWithoutTracking()
+    public async Task CreateInvoice_AmountlessTopUpIsRejectedBeforeContactingProvider()
     {
         var invoiceService = new RecordingInvoiceService();
-        var client = CreateClient(
-            new StaticResponseHandler(CreateResponse("fixed-id", AmountBearingBolt11)),
-            invoiceService,
-            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
+        var provider = new RecordingResponseHandler(CreateResponse("amountless-id", AmountlessBolt11));
+        var client = CreateClient(provider, invoiceService, timeProvider: AtInvoiceTimestamp(AmountlessBolt11));
 
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
-            new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromMinutes(1)),
+        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromHours(1)),
             TestContext.Current.CancellationToken));
 
-        Assert.Contains("amount-bearing", exception.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("LNURL", exception.Message, StringComparison.Ordinal);
+        Assert.Equal(0, provider.RequestCount);
         Assert.Empty(invoiceService.TrackCalls);
+    }
+
+    [Fact]
+    public async Task TrackedAmountlessInvoiceReportedPaid_IsNotCreditedAsZero()
+    {
+        const string accountId = "legacy-amountless-owner";
+        var scope = Scope(accountId);
+        var invoiceService = new RecordingInvoiceService();
+        await invoiceService.TrackInvoice(scope, AmountlessBolt11, TestContext.Current.CancellationToken);
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(AmountlessBolt11, "INVOICE_STATUS_PAID")),
+            invoiceService,
+            accountId);
+
+        Assert.Null(await client.GetInvoice(AmountlessBolt11, TestContext.Current.CancellationToken));
+
+        // The listener polls as soon as it starts, so a second is ample for a wrongful delivery to show up.
+        using var listener = await client.Listen(TestContext.Current.CancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listener.WaitInvoice(timeout.Token));
+    }
+
+    [Fact]
+    public async Task TopUpPaidThroughFixedAmountInvoice_IsDeliveredWithTheAmountPaid()
+    {
+        // BTCPay serves top-ups through LNURL, which creates a fixed-amount invoice for the amount the payer chose.
+        const string accountId = "top-up-owner";
+        var paidAmount = LightMoney.Satoshis(250_000);
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new LifecycleProviderHandler("top-up-id", AmountBearingBolt11),
+            invoiceService,
+            accountId,
+            AtInvoiceTimestamp(AmountBearingBolt11));
+
+        var created = await client.CreateInvoice(
+            new CreateInvoiceParams(paidAmount, "top-up", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken);
+        using var listener = await client.Listen(TestContext.Current.CancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var delivered = await listener.WaitInvoice(timeout.Token);
+
+        Assert.Equal(created.Id, delivered.Id);
+        Assert.Equal(LightningInvoiceStatus.Paid, delivered.Status);
+        Assert.Equal(paidAmount, delivered.AmountReceived);
+        Assert.Equal(paidAmount, delivered.Amount);
     }
 
     [Theory]
@@ -600,13 +647,16 @@ public class BareBitcoinInvoiceLifecycleTests
     private sealed class RecordingResponseHandler(string response) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _requestBodies = new();
+        private int _requestCount;
 
         public string[] RequestBodies => _requestBodies.ToArray();
+        public int RequestCount => Volatile.Read(ref _requestCount);
 
         protected override async Task<HttpResponseMessage> SendAsync(
             HttpRequestMessage request,
             CancellationToken cancellationToken)
         {
+            Interlocked.Increment(ref _requestCount);
             if (request.Content is not null)
                 _requestBodies.Enqueue(await request.Content.ReadAsStringAsync(cancellationToken));
             return JsonResponse(response);
