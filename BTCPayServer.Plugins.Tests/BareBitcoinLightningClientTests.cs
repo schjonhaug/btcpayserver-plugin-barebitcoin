@@ -93,6 +93,23 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task CreateInvoice_SignedRequestLogsNeitherSignatureNorApiKey()
+    {
+        var logger = new CapturingLogger();
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, new ThrowingInvoiceService(), logger, timeProvider: ValidCreateTimeProvider);
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken);
+
+        var signature = Assert.Single(Assert.Single(handler.Requests).Headers.GetValues("x-bb-api-hmac"));
+        Assert.Contains(logger.Entries, entry => entry.Message.Contains("x-bb-api-hmac", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(signature, StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("test-public-key", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetInvoice_ReturnsInvoice_WhenTrackInvoiceThrowsIOException()
     {
         var invoiceService = new ThrowingInvoiceService(

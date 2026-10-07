@@ -283,8 +283,9 @@ public class BareBitcoinApiService
             request.Headers.Add("x-bb-trace", CreateTraceHeader());
 
             // Header values carry the API key and signature, so only the names are logged
-            _logger.LogDebug("Request headers: {HeaderNames}",
-                string.Join(", ", request.Headers.Select(header => header.Key)));
+            if (_logger.IsEnabled(LogLevel.Debug))
+                _logger.LogDebug("Request headers: {HeaderNames}",
+                    string.Join(", ", request.Headers.Select(header => header.Key)));
 
             if (data != null && method != "GET")
             {
