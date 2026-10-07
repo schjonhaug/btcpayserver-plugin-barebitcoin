@@ -1,12 +1,12 @@
 ﻿@model BTCPayServer.Models.StoreViewModels.LightningNodeViewModel
 @inject BTCPayServer.Plugins.BareBitcoin.Services.IBareBitcoinStoreBinding StoreBinding
 @{
-    var storeId = ViewContext.RouteData.Values["storeId"]?.ToString() ?? Model.StoreId;
-    var protectedStoreId = string.IsNullOrWhiteSpace(storeId) ? string.Empty : BTCPayServer.Plugins.BareBitcoin.Services.BareBitcoinStoreBinding.ForSetup(StoreBinding, storeId, Model.ConnectionString);
     if (Model.CryptoCode != "BTC")
     {
         return;
     }
+    var storeId = ViewContext.RouteData.Values["storeId"]?.ToString() ?? Model.StoreId;
+    var protectedStoreId = string.IsNullOrWhiteSpace(storeId) ? string.Empty : BTCPayServer.Plugins.BareBitcoin.Services.BareBitcoinStoreBinding.ForSetup(StoreBinding, storeId, Model.ConnectionString);
 }
 
 <script>

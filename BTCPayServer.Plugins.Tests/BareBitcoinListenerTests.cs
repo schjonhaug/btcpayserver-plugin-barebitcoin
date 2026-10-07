@@ -989,6 +989,40 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Equal(firstDelivered, redelivered.Id);
     }
 
+    [Fact]
+    public async Task CompletedInvoices_DoNotEvictTheMarkerOfAnInvoiceStillPending()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice(Scope, "inv-stuck", TestContext.Current.CancellationToken);
+
+        // inv-stuck stays tracked because its untrack keeps failing; the others complete normally.
+        var faultyService = new FaultyUntrackInvoiceService(realService, faultyInvoiceId: "inv-stuck");
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        var pollCycles = 0;
+        using var listener = new BareBitcoinListener(client, faultyService, Scope, NullLogger.Instance,
+            channelCapacity: 10, maxDeliveredCapacity: 2,
+            onPollCycleCompleted: () => Interlocked.Increment(ref pollCycles));
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-stuck", (await listener.WaitInvoice(cts.Token)).Id);
+
+        // More payments than the marker capacity complete after inv-stuck was delivered.
+        foreach (var invoiceId in new[] { "inv-1", "inv-2", "inv-3", "inv-4" })
+            await realService.TrackInvoice(Scope, invoiceId, TestContext.Current.CancellationToken);
+        var delivered = new List<string>();
+        for (var i = 0; i < 4; i++)
+            delivered.Add((await listener.WaitInvoice(cts.Token)).Id);
+        Assert.Equal(new[] { "inv-1", "inv-2", "inv-3", "inv-4" }, delivered.OrderBy(id => id).ToArray());
+
+        // Later polls keep finding inv-stuck paid; its marker must still be there.
+        var cyclesAfterDelivery = Volatile.Read(ref pollCycles);
+        await WaitUntil(() => Volatile.Read(ref pollCycles) >= cyclesAfterDelivery + 2, cts.Token);
+        using var shortCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => listener.WaitInvoice(shortCts.Token));
+        Assert.Equal(["inv-stuck"], await realService.GetTrackedInvoices(Scope, TestContext.Current.CancellationToken));
+    }
+
     /// <summary>
     /// Wraps a real IBareBitcoinInvoiceService, throwing IOException from UntrackInvoice
     /// for a specific invoice ID to simulate disk failures.
