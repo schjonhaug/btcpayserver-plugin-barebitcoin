@@ -341,7 +341,7 @@ public class BareBitcoinLightningClientTests
     public async Task GetInvoice_PaidReportsNoPaidAtWithoutAProviderTimestamp()
     {
         var client = CreateClient(
-            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID", ValidCreateBolt11)),
             new ScopedInMemoryInvoiceService(),
             timeProvider: ValidCreateTimeProvider);
 
