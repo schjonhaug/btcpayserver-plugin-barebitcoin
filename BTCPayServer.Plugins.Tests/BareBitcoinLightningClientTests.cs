@@ -78,7 +78,7 @@ public class BareBitcoinLightningClientTests
     {
         var logger = new CapturingLogger();
         var client = CreateClient(
-            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID", ValidCreateBolt11)),
             new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())),
             logger);
 
