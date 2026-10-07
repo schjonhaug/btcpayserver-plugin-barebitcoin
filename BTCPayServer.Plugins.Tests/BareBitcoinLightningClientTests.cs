@@ -363,9 +363,7 @@ public class BareBitcoinLightningClientTests
             TestContext.Current.CancellationToken);
 
         var requestBody = Newtonsoft.Json.Linq.JObject.Parse(Assert.Single(handler.RequestBodies));
-        Assert.Equal(
-            $"BTCPay Server Invoice - {ValidCreateTimeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}",
-            requestBody.Value<string>("internalDescription"));
+        Assert.Equal("BTCPay Server Invoice - 2017-06-01 10:57:38", requestBody.Value<string>("internalDescription"));
     }
 
     [Fact]

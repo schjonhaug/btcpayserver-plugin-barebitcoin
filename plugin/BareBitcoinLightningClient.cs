@@ -433,7 +433,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 currency = "CURRENCY_BTC",
                 amount = createInvoiceRequest.Amount.ToDecimal(LightMoneyUnit.BTC),
                 publicDescription = createInvoiceRequest.Description,
-                internalDescription = $"BTCPay Server Invoice - {_timeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}",
+                internalDescription = FormattableString.Invariant($"BTCPay Server Invoice - {_timeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}"),
                 expirySeconds
             };
 
