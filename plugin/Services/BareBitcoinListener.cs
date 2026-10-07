@@ -3,6 +3,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Channels;
@@ -49,7 +50,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private static readonly TimeSpan DefaultPeerDeliveryTimeout = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _peerDeliveryTimeout;
 
-    private bool _isDisposed;
+    private volatile bool _isDisposed;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
     private readonly int _maxPollConcurrency;
@@ -176,12 +177,13 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     {
                         // Only BTCPay knows which listener of this scope waits for the invoice, so it is
                         // offered to every live listener before it is untracked. Each one delivers it once.
+                        // The delivery marker is kept after untracking: another listener may still be
+                        // processing a result it fetched before the untrack, and offer the invoice again.
                         var deliveredToPeers = await DeliverToPeers(invoiceId, invoice);
                         await Deliver(invoiceId, invoice, _cts.Token);
                         if (!deliveredToPeers)
                             continue;
-                        if (await TryUntrackInvoice(invoiceId))
-                            RemoveDeliveredInvoice(invoiceId);
+                        await TryUntrackInvoice(invoiceId);
                     }
                     else if (invoice.Status == LightningInvoiceStatus.Expired)
                     {
@@ -315,16 +317,15 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// </summary>
     private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice)
     {
-        var deliveredToAll = true;
-        foreach (var peer in _listenerHub.GetListeners(_invoiceScope))
-        {
-            if (ReferenceEquals(peer, this))
-                continue;
-            if (!await peer.DeliverFromPeer(invoiceId, invoice, _cts.Token))
-                deliveredToAll = false;
-        }
+        var peers = _listenerHub.GetListeners(_invoiceScope)
+            .Where(peer => !ReferenceEquals(peer, this))
+            .ToArray();
+        if (peers.Length == 0)
+            return true;
 
-        return deliveredToAll;
+        // Offered concurrently, so a slow listener delays the invoice by at most one timeout.
+        var delivered = await Task.WhenAll(peers.Select(peer => peer.DeliverFromPeer(invoiceId, invoice, _cts.Token)));
+        return delivered.All(accepted => accepted);
     }
 
     private async Task<bool> DeliverFromPeer(string invoiceId, LightningInvoice invoice, CancellationToken peerCancellation)

@@ -259,6 +259,49 @@ public class BareBitcoinListenerTests : IDisposable
         await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
     }
 
+    [Fact]
+    public async Task PaidInvoice_FetchedByTwoListenersBeforeUntracking_IsDeliveredToEachOnce()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+        var lateFetchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        // The late listener has already fetched the paid invoice, but only answers after the early
+        // listener delivered and untracked it, so it offers the invoice to the early listener again.
+        var lateClient = new FakeLightningClient(async (invoiceId, token) =>
+        {
+            lateFetchStarted.TrySetResult();
+            while ((await invoiceService.GetTrackedInvoices(Scope, token)).Contains(invoiceId))
+                await Task.Delay(10, token);
+            return PaidInvoice(invoiceId);
+        });
+        var earlyClient = new FakeLightningClient(async (invoiceId, token) =>
+        {
+            await lateFetchStarted.Task.WaitAsync(token);
+            return PaidInvoice(invoiceId);
+        });
+
+        var lateCycleCompleted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        using var lateListener = new BareBitcoinListener(
+            lateClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub,
+            onPollCycleCompleted: () => lateCycleCompleted.TrySetResult());
+        using var earlyListener = new BareBitcoinListener(
+            earlyClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-1", (await earlyListener.WaitInvoice(cts.Token)).Id);
+        Assert.Equal("inv-1", (await lateListener.WaitInvoice(cts.Token)).Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+
+        // Once the late listener has processed its result, neither listener has a second notification.
+        await lateCycleCompleted.Task.WaitAsync(cts.Token);
+        using var earlyCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => earlyListener.WaitInvoice(earlyCts.Token));
+        using var lateCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => lateListener.WaitInvoice(lateCts.Token));
+    }
+
     private static async Task WaitUntil(Func<bool> condition, CancellationToken cancellation)
     {
         while (!condition())
