@@ -17,6 +17,8 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 **Top-ups through LNURL only** — Bare Bitcoin does not report how much an amountless invoice received, so the plugin cannot credit one correctly and refuses to create it. For top-up invoices BTCPay then offers no plain BOLT11, and the payer pays through LNURL, which creates an invoice for the amount they choose.
 
+**No payment time or proof of payment** — Bare Bitcoin's invoice lookup reports neither when an invoice was paid nor its preimage. The plugin leaves the payment time empty, so BTCPay records the payment at the time it detects it.
+
 ## Tracked Invoice Migration
 
 Plugin versions that used the legacy flat tracked-invoice file, or schema version 2 account-scoped state, did not persist which BTCPay store owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.

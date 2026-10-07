@@ -202,7 +202,6 @@ public class BareBitcoinLightningClient : ILightningClient
             return null;
         }
 
-        var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
         var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
         // A payment hash is not proof of payment, so only a preimage that hashes to it is reported.
         var preimage = status == LightningInvoiceStatus.Paid ?
@@ -218,7 +217,9 @@ public class BareBitcoinLightningClient : ILightningClient
             AmountReceived = amountReceived,
             ExpiresAt = bolt11.ExpiryDate,
             PaymentHash = paymentHash,
-            PaidAt = paidAt,
+            // The lookup does not report when the invoice was paid, and the polling time must not
+            // stand in for it: BTCPay then records the payment at the time it detects it.
+            PaidAt = null,
             Preimage = preimage
         };
 
@@ -432,7 +433,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 currency = "CURRENCY_BTC",
                 amount = createInvoiceRequest.Amount.ToDecimal(LightMoneyUnit.BTC),
                 publicDescription = createInvoiceRequest.Description,
-                internalDescription = $"BTCPay Server Invoice - {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm:ss}",
+                internalDescription = $"BTCPay Server Invoice - {_timeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}",
                 expirySeconds
             };
 

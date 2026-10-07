@@ -178,7 +178,7 @@ public class BareBitcoinLightningClientTests
 
             Assert.NotNull(invoice);
             Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
-            Assert.NotNull(invoice.PaidAt);
+            Assert.Null(invoice.PaidAt);
             Assert.Equal(LightMoney.Satoshis(250_000), invoice.AmountReceived);
             var ownerScope = BareBitcoinInvoiceScope.ForStoreConnection(
                 new Uri("https://api.example.com"), Network.Main, "owner-account", "test-store");
@@ -335,6 +335,37 @@ public class BareBitcoinLightningClientTests
         Assert.True(request.Headers.Contains("x-bb-api-key"));
         Assert.True(request.Headers.Contains("x-bb-api-nonce"));
         Assert.True(request.Headers.Contains("x-bb-api-hmac"));
+    }
+
+    [Fact]
+    public async Task GetInvoice_PaidReportsNoPaidAtWithoutAProviderTimestamp()
+    {
+        var client = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+            new ScopedInMemoryInvoiceService(),
+            timeProvider: ValidCreateTimeProvider);
+
+        var invoice = await client.GetInvoice("paid-id", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+        Assert.Null(invoice.PaidAt);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_TakesTheInternalDescriptionTimeFromTheTimeProvider()
+    {
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, new ScopedInMemoryInvoiceService(), timeProvider: ValidCreateTimeProvider);
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken);
+
+        var requestBody = Newtonsoft.Json.Linq.JObject.Parse(Assert.Single(handler.RequestBodies));
+        Assert.Equal(
+            $"BTCPay Server Invoice - {ValidCreateTimeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}",
+            requestBody.Value<string>("internalDescription"));
     }
 
     [Fact]
