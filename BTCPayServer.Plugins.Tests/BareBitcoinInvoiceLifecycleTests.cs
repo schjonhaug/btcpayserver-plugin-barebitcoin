@@ -271,9 +271,10 @@ public class BareBitcoinInvoiceLifecycleTests
 
         Assert.Null(await client.GetInvoice(AmountlessBolt11, TestContext.Current.CancellationToken));
 
+        // The listener polls as soon as it starts, so a second is ample for a wrongful delivery to show up.
         using var listener = await client.Listen(TestContext.Current.CancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(3));
+        timeout.CancelAfter(TimeSpan.FromSeconds(1));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listener.WaitInvoice(timeout.Token));
     }
 
