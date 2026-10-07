@@ -74,6 +74,42 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
+    public async Task GetInvoice_PaidLookupLogsNeitherPreimageNorApiKey()
+    {
+        var logger = new CapturingLogger();
+        var client = CreateClient(
+            new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+            new BareBitcoinInvoiceService(NullLogger.Instance, Path.Combine(Path.GetTempPath(), Path.GetRandomFileName())),
+            logger);
+
+        var invoice = await client.GetInvoice("paid-id", TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+        Assert.NotEmpty(logger.Entries);
+        Assert.Contains(logger.Entries, entry => entry.Message.Contains("x-bb-api-key", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("deadbeef", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("test-public-key", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task CreateInvoice_SignedRequestLogsNeitherSignatureNorApiKey()
+    {
+        var logger = new CapturingLogger();
+        var handler = new RecordingMessageHandler(CreateInvoiceApiJson());
+        var client = CreateClient(handler, new ThrowingInvoiceService(), logger, timeProvider: ValidCreateTimeProvider);
+
+        await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Satoshis(250_000), "test", TimeSpan.FromMinutes(1)),
+            TestContext.Current.CancellationToken);
+
+        var signature = Assert.Single(Assert.Single(handler.Requests).Headers.GetValues("x-bb-api-hmac"));
+        Assert.Contains(logger.Entries, entry => entry.Message.Contains("x-bb-api-hmac", StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains(signature, StringComparison.Ordinal));
+        Assert.DoesNotContain(logger.Entries, entry => entry.Message.Contains("test-public-key", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public async Task GetInvoice_ReturnsInvoice_WhenTrackInvoiceThrowsIOException()
     {
         var invoiceService = new ThrowingInvoiceService(
