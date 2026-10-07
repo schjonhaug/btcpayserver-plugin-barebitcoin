@@ -189,6 +189,18 @@ public class BareBitcoinLightningClient : ILightningClient
         ValidateLookupBinding(invoiceId, bolt11);
         var amount = bolt11.MinimumAmount;
         var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
+
+        // The lookup does not report the amount received, so a paid invoice is only credited
+        // with its encoded amount. Amountless invoices are no longer created, but one tracked by
+        // an earlier version must not be reported as a settled zero-value payment.
+        if (status == LightningInvoiceStatus.Paid && amount == LightMoney.Zero)
+        {
+            Logger.LogError(
+                "Bare Bitcoin reports amountless invoice {InvoiceId} as paid without the amount received; it cannot be credited automatically and must be reconciled manually",
+                invoiceId);
+            return null;
+        }
+
         var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
         var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
         var preimage = status == LightningInvoiceStatus.Paid ?
@@ -432,6 +444,12 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
+            // Bare Bitcoin does not report the amount an amountless invoice received, so it could only
+            // be credited as zero. BTCPay then offers top-ups through LNURL, which requests a fixed amount.
+            if (createInvoiceRequest.Amount is null || createInvoiceRequest.Amount <= LightMoney.Zero)
+                throw new NotSupportedException(
+                    "Bare Bitcoin does not report the amount received for amountless invoices, so they cannot be credited correctly. Use LNURL for top-ups");
+
             var expirySeconds = ToProviderExpirySeconds(createInvoiceRequest.Expiry);
             var requestedExpiryDate = _timeProvider.GetUtcNow() + createInvoiceRequest.Expiry;
             var requestData = new
@@ -529,13 +547,7 @@ public class BareBitcoinLightningClient : ILightningClient
         DateTimeOffset requestedExpiryDate)
     {
         var returnedAmount = bolt11.MinimumAmount;
-        if (request.Amount == LightMoney.Zero)
-        {
-            if (returnedAmount != LightMoney.Zero)
-                throw new InvalidOperationException(
-                    $"Bare Bitcoin returned an amount-bearing BOLT11 for an amountless request ({returnedAmount})");
-        }
-        else if (returnedAmount == LightMoney.Zero || returnedAmount != request.Amount)
+        if (returnedAmount == LightMoney.Zero || returnedAmount != request.Amount)
         {
             throw new InvalidOperationException(
                 $"Bare Bitcoin returned a BOLT11 amount of {returnedAmount}, expected {request.Amount}");

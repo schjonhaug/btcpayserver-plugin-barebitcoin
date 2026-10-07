@@ -15,6 +15,8 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 **Checkout expiry between 1 minute and 24 hours** — Bare Bitcoin creates invoices that stay payable for 60 seconds to 24 hours, and the plugin forwards the store's remaining checkout window rather than accepting a mismatched lifetime. Lightning payments fail outside that range. Keep the store invoice expiration at 2 minutes or more: a 1-minute expiration leaves less than 60 seconds once BTCPay has processed the checkout, which rejects the invoice intermittently.
 
+**Top-ups through LNURL only** — Bare Bitcoin does not report how much an amountless invoice received, so the plugin cannot credit one correctly and refuses to create it. For top-up invoices BTCPay then offers no plain BOLT11, and the payer pays through LNURL, which creates an invoice for the amount they choose.
+
 ## Tracked Invoice Migration
 
 Plugin versions that used the legacy flat tracked-invoice file, or schema version 2 account-scoped state, did not persist which BTCPay store owned each invoice. On upgrade, those invoice IDs are retained in an unassigned quarantine instead of being deleted or exposed to every configured store. Until ownership is recovered, no plugin listener can enumerate, query, or remove them.

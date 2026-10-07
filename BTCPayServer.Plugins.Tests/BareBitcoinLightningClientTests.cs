@@ -34,9 +34,9 @@ public class BareBitcoinLightningClientTests
     // Valid Base64 key required by BareBitcoinApiService.CreateHmac
     private const string TestPrivateKey = "dGVzdC1wcml2YXRlLWtleS1mb3ItaG1hYw==";
 
-    private static string ApiJson(string status) => $$"""
+    private static string ApiJson(string status, string bolt11 = TestBolt11) => $$"""
         {
-            "invoice": "{{TestBolt11}}",
+            "invoice": "{{bolt11}}",
             "status": "{{status}}",
             "preimage": "deadbeef"
         }
@@ -134,7 +134,7 @@ public class BareBitcoinLightningClientTests
         {
             await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, filePath);
             var client = CreateClient(
-                new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID")),
+                new FakeMessageHandler(ApiJson("INVOICE_STATUS_PAID", ValidCreateBolt11)),
                 invoiceService,
                 accountId: "owner-account");
 
@@ -143,7 +143,7 @@ public class BareBitcoinLightningClientTests
             Assert.NotNull(invoice);
             Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
             Assert.NotNull(invoice.PaidAt);
-            Assert.NotNull(invoice.AmountReceived);
+            Assert.Equal(LightMoney.Satoshis(250_000), invoice.AmountReceived);
             var ownerScope = BareBitcoinInvoiceScope.ForStoreConnection(
                 new Uri("https://api.example.com"), Network.Main, "owner-account", "test-store");
             var foreignScope = BareBitcoinInvoiceScope.ForStoreConnection(
