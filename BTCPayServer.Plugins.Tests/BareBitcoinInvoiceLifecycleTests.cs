@@ -402,7 +402,7 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
-    public async Task GetInvoice_PaidWithoutPreimageFallsBackToPaymentHashAndStaysTracked()
+    public async Task GetInvoice_PaidWithoutPreimageReportsNoPreimageAndStaysTracked()
     {
         const string invoiceId = "paid-id";
         const string accountId = "paid-owner";
@@ -414,13 +414,12 @@ public class BareBitcoinInvoiceLifecycleTests
             new StaticResponseHandler(GetResponse(AmountBearingBolt11, "INVOICE_STATUS_PAID")),
             invoiceService,
             accountId);
-        var paymentHash = Parse(AmountBearingBolt11).PaymentHash!.ToString();
 
         var invoice = await client.GetInvoice(invoiceId, TestContext.Current.CancellationToken);
 
         Assert.NotNull(invoice);
         Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
-        Assert.Equal(paymentHash, invoice.Preimage);
+        Assert.Null(invoice.Preimage);
         Assert.Equal(Parse(AmountBearingBolt11).MinimumAmount, invoice.AmountReceived);
         Assert.Equal([invoiceId], await invoiceService.GetTrackedInvoices(
             scope, TestContext.Current.CancellationToken));
@@ -430,7 +429,7 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
-    public async Task GetInvoice_PaidWithPreimagePreservesProviderPreimageAndStaysTracked()
+    public async Task GetInvoice_PaidWithUnverifiablePreimageReportsNoPreimageAndStaysTracked()
     {
         const string invoiceId = "paid-with-preimage-id";
         const string accountId = "paid-with-preimage-owner";
@@ -451,7 +450,7 @@ public class BareBitcoinInvoiceLifecycleTests
 
         Assert.NotNull(invoice);
         Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
-        Assert.Equal(providerPreimage, invoice.Preimage);
+        Assert.Null(invoice.Preimage);
         Assert.Equal(Parse(AmountBearingBolt11).MinimumAmount, invoice.AmountReceived);
         Assert.Equal([invoiceId], await invoiceService.GetTrackedInvoices(
             scope, TestContext.Current.CancellationToken));
@@ -554,6 +553,24 @@ public class BareBitcoinInvoiceLifecycleTests
         {
             File.Delete(filePath);
         }
+    }
+
+    [Fact]
+    public void VerifiedPreimage_AcceptsOnlyAPreimageThatHashesToThePaymentHash()
+    {
+        var preimageBytes = Enumerable.Range(1, 32).Select(b => (byte)b).ToArray();
+        var preimage = Convert.ToHexStringLower(preimageBytes);
+        var paymentHash = new uint256(NBitcoin.Crypto.Hashes.SHA256(preimageBytes), false);
+
+        Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage(preimage, paymentHash));
+        Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage(preimage.ToUpperInvariant(), paymentHash));
+        Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage($" {preimage} ", paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(preimage, null));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(null, paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage("", paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(paymentHash.ToString(), paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage("provider-preimage", paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(new string('0', 64), paymentHash));
     }
 
     private static BareBitcoinLightningClient CreateClient(

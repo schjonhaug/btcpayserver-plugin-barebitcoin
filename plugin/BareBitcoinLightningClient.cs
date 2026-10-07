@@ -12,6 +12,7 @@ using BTCPayServer.Lightning;
 using BTCPayServer.Plugins.BareBitcoin.Services;
 using Microsoft.Extensions.Logging;
 using NBitcoin;
+using NBitcoin.DataEncoders;
 using Newtonsoft.Json;
 using Newtonsoft.Json.Linq;
 using Network = NBitcoin.Network;
@@ -203,8 +204,9 @@ public class BareBitcoinLightningClient : ILightningClient
 
         var paidAt = status == LightningInvoiceStatus.Paid ? DateTimeOffset.UtcNow : (DateTimeOffset?)null;
         var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
+        // A payment hash is not proof of payment, so only a preimage that hashes to it is reported.
         var preimage = status == LightningInvoiceStatus.Paid ?
-            (responseObj["preimage"]?.Value<string>() ?? paymentHash) :
+            VerifiedPreimage(responseObj["preimage"]?.Value<string>(), bolt11.PaymentHash) :
             null;
 
         var result = new LightningInvoice
@@ -251,34 +253,6 @@ public class BareBitcoinLightningClient : ILightningClient
             result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage is not null);
 
         return result;
-    }
-
-    public LightningInvoice? ToInvoice(JObject invoice)
-    {
-        var paymentRequestToken = invoice["paymentRequest"];
-        if (paymentRequestToken?.Value<string>() is not string paymentRequest)
-            return null;
-            
-        var bolt11 = BOLT11PaymentRequest.Parse(paymentRequest, _network);
-        var status = (invoice["paymentStatus"]?.Value<string>()) switch
-        {
-            "EXPIRED" => LightningInvoiceStatus.Expired,
-            "PAID" => LightningInvoiceStatus.Paid,
-            "PENDING" => LightningInvoiceStatus.Unpaid,
-            _ => LightningInvoiceStatus.Unpaid // Default case
-        };
-        
-        return new LightningInvoice()
-        {
-            Id = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
-            Amount = invoice["satoshis"] is null ? bolt11.MinimumAmount : LightMoney.Satoshis(invoice["satoshis"]!.Value<long>()),
-            Preimage = invoice["paymentSecret"]?.Value<string>(),
-            PaidAt = (status == LightningInvoiceStatus.Paid) ? DateTimeOffset.UtcNow : (DateTimeOffset?)null,
-            Status = status,
-            BOLT11 = paymentRequest,
-            PaymentHash = invoice["paymentHash"]?.Value<string>() ?? string.Empty,
-            ExpiresAt = bolt11.ExpiryDate
-        };
     }
 
     public async Task<LightningInvoice?> GetInvoice(uint256 paymentHash,
@@ -563,6 +537,22 @@ public class BareBitcoinLightningClient : ILightningClient
             throw new InvalidOperationException(
                 $"Bare Bitcoin returned a BOLT11 expiring at {bolt11.ExpiryDate:O}, outside the requested monitoring deadline {requestedExpiryDate:O}");
         }
+    }
+
+    /// <summary>
+    /// Returns the provider preimage only when it hashes to the invoice's payment hash.
+    /// </summary>
+    internal static string? VerifiedPreimage(string? preimage, uint256? paymentHash)
+    {
+        if (paymentHash is null || string.IsNullOrWhiteSpace(preimage))
+            return null;
+
+        preimage = preimage.Trim();
+        if (preimage.Length != 64 || !HexEncoder.IsWellFormed(preimage))
+            return null;
+
+        var hash = NBitcoin.Crypto.Hashes.SHA256(Encoders.Hex.DecodeData(preimage));
+        return hash.AsSpan().SequenceEqual(paymentHash.ToBytes(false)) ? preimage.ToLowerInvariant() : null;
     }
 
     private void ValidateLookupBinding(string invoiceId, BOLT11PaymentRequest returnedBolt11)
