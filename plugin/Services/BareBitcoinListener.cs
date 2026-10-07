@@ -186,15 +186,19 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     {
                         // Only BTCPay knows which listener of this scope waits for the invoice, so it is
                         // offered to every live listener before it is untracked. Each one delivers it once.
-                        // Its own channel is not held up waiting on the others.
-                        var deliveredToPeers = DeliverToPeers(invoiceId, invoice, stalledPeers);
+                        // Its own channel is not held up waiting on the others. Only the listeners it was
+                        // offered to are marked complete: one that joins meanwhile must still deliver it itself.
+                        var peers = _listenerHub.GetListeners(_invoiceScope)
+                            .Where(peer => !ReferenceEquals(peer, this))
+                            .ToArray();
+                        var deliveredToPeers = DeliverToPeers(invoiceId, invoice, peers, stalledPeers);
                         await Task.WhenAll(deliveredToPeers, Deliver(invoiceId, invoice, _cts.Token));
                         if (!await deliveredToPeers)
                             continue;
                         if (await TryUntrackInvoice(invoiceId))
                         {
-                            foreach (var listener in _listenerHub.GetListeners(_invoiceScope))
-                                listener.CompleteDelivered(invoiceId);
+                            foreach (var peer in peers)
+                                peer.CompleteDelivered(invoiceId);
                             CompleteDelivered(invoiceId);
                         }
                     }
@@ -350,11 +354,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// Offers a paid invoice to every other live listener of this scope.
     /// Returns false when a listener could not take it yet, so the invoice stays tracked and is offered again.
     /// </summary>
-    private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice, HashSet<BareBitcoinListener> stalledPeers)
+    private async Task<bool> DeliverToPeers(string invoiceId, LightningInvoice invoice, BareBitcoinListener[] peers, HashSet<BareBitcoinListener> stalledPeers)
     {
-        var peers = _listenerHub.GetListeners(_invoiceScope)
-            .Where(peer => !ReferenceEquals(peer, this))
-            .ToArray();
         if (peers.Length == 0)
             return true;
 

@@ -1023,6 +1023,69 @@ public class BareBitcoinListenerTests : IDisposable
         Assert.Equal(["inv-stuck"], await realService.GetTrackedInvoices(Scope, TestContext.Current.CancellationToken));
     }
 
+    [Fact]
+    public async Task ListenerJoiningWhileAPaymentIsDelivered_StillDeliversItsOwnPollResult()
+    {
+        await using var realService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await realService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+        var lateFetchStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        BareBitcoinListener? lateListener = null;
+
+        // The late listener has fetched the paid invoice but only answers once it is untracked.
+        var lateClient = new FakeLightningClient(async (invoiceId, token) =>
+        {
+            lateFetchStarted.TrySetResult();
+            while ((await realService.GetTrackedInvoices(Scope, token)).Contains(invoiceId))
+                await Task.Delay(10, token);
+            return PaidInvoice(invoiceId);
+        });
+
+        // The late listener joins after the early one offered the invoice to its peers, but before it untracks.
+        var invoiceService = new BeforeUntrackInvoiceService(realService, async () =>
+        {
+            if (lateListener is not null)
+                return;
+            lateListener = new BareBitcoinListener(
+                lateClient, realService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+            await lateFetchStarted.Task.WaitAsync(TestTimeout);
+        });
+        var earlyClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+
+        using var earlyListener = new BareBitcoinListener(
+            earlyClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+        try
+        {
+            using var cts = new CancellationTokenSource(TestTimeout);
+            Assert.Equal("inv-1", (await earlyListener.WaitInvoice(cts.Token)).Id);
+            await WaitUntil(() => lateListener is not null, cts.Token);
+            Assert.Equal("inv-1", (await lateListener!.WaitInvoice(cts.Token)).Id);
+        }
+        finally
+        {
+            lateListener?.Dispose();
+        }
+    }
+
+    private sealed class BeforeUntrackInvoiceService(IBareBitcoinInvoiceService inner, Func<Task> beforeUntrack) : IBareBitcoinInvoiceService
+    {
+        public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.TrackInvoice(scope, invoiceId, cancellation);
+
+        public async Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+        {
+            await beforeUntrack();
+            await inner.UntrackInvoice(scope, invoiceId, cancellation);
+        }
+
+        public Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.TryClaimLegacyInvoice(scope, invoiceId, cancellation);
+
+        public Task<IReadOnlyCollection<string>> GetTrackedInvoices(BareBitcoinInvoiceScope scope, CancellationToken cancellation = default)
+            => inner.GetTrackedInvoices(scope, cancellation);
+    }
+
     /// <summary>
     /// Wraps a real IBareBitcoinInvoiceService, throwing IOException from UntrackInvoice
     /// for a specific invoice ID to simulate disk failures.
