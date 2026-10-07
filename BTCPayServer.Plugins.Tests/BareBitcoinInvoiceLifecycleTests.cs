@@ -573,12 +573,85 @@ public class BareBitcoinInvoiceLifecycleTests
         Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(new string('0', 64), paymentHash));
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task ResavedConnection_ListenerThatPollsFirstStillDeliversToTheOtherConnection(bool createThroughNewConnection)
+    {
+        // Saving the Lightning setup again yields a new connection string for the same store and account,
+        // so BTCPay runs an old and a new listener side by side over the same tracked invoices.
+        const string accountId = "resaved-account";
+        const string storeId = "resaved-store";
+        var hub = new BareBitcoinListenerHub();
+        var invoiceService = new RecordingInvoiceService();
+        var provider = new LifecycleProviderHandler("resaved-id", AmountBearingBolt11);
+
+        // The connection that created the invoice cannot see the payment until released, so the
+        // other connection's listener always finds it first.
+        var creatorMayPoll = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var creator = CreateClient(
+            new GatedLookupHandler(provider, creatorMayPoll.Task), invoiceService, accountId,
+            AtInvoiceTimestamp(AmountBearingBolt11), storeId, hub);
+        var other = CreateClient(provider, invoiceService, accountId, storeId: storeId, listenerHub: hub);
+        var oldClient = createThroughNewConnection ? other : creator;
+        var newClient = createThroughNewConnection ? creator : other;
+
+        using var oldListener = await oldClient.Listen(TestContext.Current.CancellationToken);
+        using var newListener = await newClient.Listen(TestContext.Current.CancellationToken);
+        try
+        {
+            var created = await creator.CreateInvoice(
+                new CreateInvoiceParams(LightMoney.Satoshis(250_000), "resaved", TimeSpan.FromMinutes(1)),
+                TestContext.Current.CancellationToken);
+            var creatorListener = createThroughNewConnection ? newListener : oldListener;
+
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(10));
+
+            // BTCPay's consumer for the creating connection is the one that waits for this invoice.
+            var delivered = await creatorListener.WaitInvoice(timeout.Token);
+            Assert.Equal(created.Id, delivered.Id);
+            Assert.Equal(LightningInvoiceStatus.Paid, delivered.Status);
+            Assert.Equal(LightMoney.Satoshis(250_000), delivered.AmountReceived);
+            Assert.False(creatorMayPoll.Task.IsCompleted);
+
+            // Untracked only after it reached every listener of the store.
+            var scope = Scope(accountId, storeId);
+            await WaitUntilAsync(async () => (await invoiceService.GetTrackedInvoices(scope, timeout.Token)).Count == 0, timeout.Token);
+            Assert.Equal([new ScopedInvoiceCall(scope, created.Id)], invoiceService.UntrackCalls);
+        }
+        finally
+        {
+            creatorMayPoll.TrySetResult();
+        }
+    }
+
+    [Fact]
+    public void StoreBindingForSetup_KeepsAValidExistingBindingSoTheConnectionStringStaysTheSame()
+    {
+        var binding = new BareBitcoinStoreBinding(
+            new Microsoft.AspNetCore.DataProtection.EphemeralDataProtectionProvider());
+        var existing = binding.Protect("store-a");
+        var connectionString = $"type=barebitcoin;public-key=pk;private-key=sk;account-id=acc;store-id=store-a;store-binding={existing}";
+
+        Assert.Equal(existing, BareBitcoinStoreBinding.ForSetup(binding, "store-a", connectionString));
+
+        var forOtherStore = BareBitcoinStoreBinding.ForSetup(binding, "store-b", connectionString);
+        Assert.NotEqual(existing, forOtherStore);
+        Assert.True(binding.IsValid("store-b", forOtherStore));
+
+        var fresh = BareBitcoinStoreBinding.ForSetup(binding, "store-a", null);
+        Assert.True(binding.IsValid("store-a", fresh));
+        Assert.True(binding.IsValid("store-a", BareBitcoinStoreBinding.ForSetup(binding, "store-a", "not a connection string")));
+    }
+
     private static BareBitcoinLightningClient CreateClient(
         HttpMessageHandler handler,
         IBareBitcoinInvoiceService invoiceService,
         string accountId = "test-account",
         TimeProvider? timeProvider = null,
-        string storeId = "test-store")
+        string storeId = "test-store",
+        BareBitcoinListenerHub? listenerHub = null)
     {
         var httpClient = new HttpClient(handler, disposeHandler: false) { BaseAddress = ApiEndpoint };
         return new BareBitcoinLightningClient(
@@ -592,7 +665,8 @@ public class BareBitcoinInvoiceLifecycleTests
             NullLogger.Instance,
             invoiceService,
             maxRetries: 0,
-            timeProvider: timeProvider);
+            timeProvider: timeProvider,
+            listenerHub: listenerHub);
     }
 
     private static BOLT11PaymentRequest Parse(string bolt11) =>
@@ -704,6 +778,21 @@ public class BareBitcoinInvoiceLifecycleTests
                 bolt11,
                 "INVOICE_STATUS_PAID",
                 "provider-preimage-" + invoiceId)));
+        }
+    }
+
+    /// <summary>
+    /// Holds invoice lookups until the gate opens; invoice creation passes straight through.
+    /// </summary>
+    private sealed class GatedLookupHandler(HttpMessageHandler provider, Task gate) : DelegatingHandler(provider)
+    {
+        protected override async Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            if (request.Method == HttpMethod.Get)
+                await gate.WaitAsync(cancellationToken);
+            return await base.SendAsync(request, cancellationToken);
         }
     }
 

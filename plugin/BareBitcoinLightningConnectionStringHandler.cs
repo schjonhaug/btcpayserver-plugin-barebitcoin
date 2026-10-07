@@ -16,19 +16,22 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
     private readonly IBareBitcoinInvoiceService _invoiceService;
     private readonly IBareBitcoinStoreBinding _storeBinding;
     private readonly IBareBitcoinStoreContext _storeContext;
+    private readonly BareBitcoinListenerHub _listenerHub;
 
     public BareBitcoinLightningConnectionStringHandler(
         IHttpClientFactory httpClientFactory,
         ILoggerFactory loggerFactory,
         IBareBitcoinInvoiceService invoiceService,
         IBareBitcoinStoreBinding storeBinding,
-        IBareBitcoinStoreContext storeContext)
+        IBareBitcoinStoreContext storeContext,
+        BareBitcoinListenerHub listenerHub)
     {
         _httpClientFactory = httpClientFactory;
         _loggerFactory = loggerFactory;
         _invoiceService = invoiceService;
         _storeBinding = storeBinding;
         _storeContext = storeContext;
+        _listenerHub = listenerHub;
     }
 
 
@@ -127,7 +130,7 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
 
         
 
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency);
+        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency, listenerHub: _listenerHub);
       
 
         try

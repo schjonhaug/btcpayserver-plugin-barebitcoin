@@ -51,7 +51,8 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
             NullLoggerFactory.Instance,
             invoiceService,
             new StubStoreBinding(),
-            new StubStoreContext(authenticatedStoreId));
+            new StubStoreContext(authenticatedStoreId),
+            new BareBitcoinListenerHub());
     }
 
     [Fact]

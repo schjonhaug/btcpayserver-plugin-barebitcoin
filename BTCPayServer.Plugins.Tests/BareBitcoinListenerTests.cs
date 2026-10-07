@@ -144,6 +144,128 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
+    public async Task PaidInvoice_FoundByOneListener_IsDeliveredToEveryListenerOfTheScope()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+
+        // The idle listener never gets a poll answer, so only the polling listener can find the payment.
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var idleClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        using var idleListener = new BareBitcoinListener(
+            idleClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        var pollingClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        using var pollingListener = new BareBitcoinListener(
+            pollingClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-1", (await idleListener.WaitInvoice(cts.Token)).Id);
+        Assert.Equal("inv-1", (await pollingListener.WaitInvoice(cts.Token)).Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+    }
+
+    [Fact]
+    public async Task PaidInvoice_IsNotDeliveredToListenersOfAnotherScope()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+
+        var foreignClient = new FakeLightningClient((_, _) => Task.FromResult<LightningInvoice?>(null));
+        using var foreignListener = new BareBitcoinListener(
+            foreignClient, invoiceService, OtherScope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        var ownerClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        using var ownerListener = new BareBitcoinListener(
+            ownerClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-1", (await ownerListener.WaitInvoice(cts.Token)).Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+
+        using var shortCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => foreignListener.WaitInvoice(shortCts.Token));
+    }
+
+    [Fact]
+    public async Task PaidInvoice_StaysTrackedUntilEveryListenerOfTheScopeAcceptedIt()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        await invoiceService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        await invoiceService.TrackInvoice(Scope, "inv-2", TestContext.Current.CancellationToken);
+        var hub = new BareBitcoinListenerHub();
+
+        // The idle listener's channel holds one notification and nobody reads it yet.
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var idleClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        using var idleListener = new BareBitcoinListener(
+            idleClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 1, listenerHub: hub,
+            peerDeliveryTimeout: TimeSpan.FromMilliseconds(100));
+
+        var pollCycles = 0;
+        var pollingClient = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        using var pollingListener = new BareBitcoinListener(
+            pollingClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub,
+            onPollCycleCompleted: () => Interlocked.Increment(ref pollCycles));
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        await WaitUntil(() => Volatile.Read(ref pollCycles) >= 2, cts.Token);
+
+        // One invoice reached the idle listener and was untracked; the other could not be delivered and stays tracked.
+        var tracked = await invoiceService.GetTrackedInvoices(Scope, TestContext.Current.CancellationToken);
+        var pending = Assert.Single(tracked);
+
+        var first = await idleListener.WaitInvoice(cts.Token);
+        Assert.NotEqual(pending, first.Id);
+
+        // Once the idle listener has room, the pending invoice reaches it and is untracked.
+        var second = await idleListener.WaitInvoice(cts.Token);
+        Assert.Equal(pending, second.Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, pending);
+
+        // The polling listener delivered each invoice to itself once.
+        var own = new[] { (await pollingListener.WaitInvoice(cts.Token)).Id, (await pollingListener.WaitInvoice(cts.Token)).Id };
+        Assert.Equal(new[] { "inv-1", "inv-2" }, own.OrderBy(id => id).ToArray());
+        using var shortCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(250));
+        await Assert.ThrowsAsync<OperationCanceledException>(() => pollingListener.WaitInvoice(shortCts.Token));
+    }
+
+    [Fact]
+    public async Task DisposedListener_DoesNotHoldBackOrConsumeDeliveries()
+    {
+        await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
+        var hub = new BareBitcoinListenerHub();
+
+        var neverAnswers = new TaskCompletionSource<LightningInvoice?>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var disposedClient = new FakeLightningClient((_, token) => neverAnswers.Task.WaitAsync(token));
+        var disposedListener = new BareBitcoinListener(
+            disposedClient, invoiceService, Scope, NullLogger.Instance, channelCapacity: 1, listenerHub: hub);
+        disposedListener.Dispose();
+        Assert.Empty(hub.GetListeners(Scope));
+
+        await invoiceService.TrackInvoice(Scope, "inv-1", TestContext.Current.CancellationToken);
+        var client = new FakeLightningClient((invoiceId, _) =>
+            Task.FromResult<LightningInvoice?>(PaidInvoice(invoiceId)));
+        using var listener = new BareBitcoinListener(
+            client, invoiceService, Scope, NullLogger.Instance, channelCapacity: 10, listenerHub: hub);
+
+        using var cts = new CancellationTokenSource(TestTimeout);
+        Assert.Equal("inv-1", (await listener.WaitInvoice(cts.Token)).Id);
+        await WaitUntilInvoiceIsUntracked(invoiceService, "inv-1");
+    }
+
+    private static async Task WaitUntil(Func<bool> condition, CancellationToken cancellation)
+    {
+        while (!condition())
+            await Task.Delay(TimeSpan.FromMilliseconds(10), cancellation);
+    }
+
+    [Fact]
     public async Task ChannelFull_BackpressuresInsteadOfDropping()
     {
         await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
