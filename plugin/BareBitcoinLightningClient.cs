@@ -235,8 +235,8 @@ public class BareBitcoinLightningClient : ILightningClient
             }
         }
 
-        Logger.LogInformation("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, Preimage: {Preimage}",
-            result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage);
+        Logger.LogDebug("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, HasPreimage: {HasPreimage}",
+            result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage is not null);
 
         return result;
     }

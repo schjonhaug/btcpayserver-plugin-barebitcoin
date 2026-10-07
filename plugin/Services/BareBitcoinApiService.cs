@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Linq;
 using System.Net;
 using System.Net.Http;
 using System.Threading;
@@ -281,10 +282,9 @@ public class BareBitcoinApiService
 
             request.Headers.Add("x-bb-trace", CreateTraceHeader());
 
-            foreach (var header in request.Headers)
-            {
-                _logger.LogDebug("Request header: {HeaderName}: {HeaderValue}", header.Key, header.Value);
-            }
+            // Header values carry the API key and signature, so only the names are logged
+            _logger.LogDebug("Request headers: {HeaderNames}",
+                string.Join(", ", request.Headers.Select(header => header.Key)));
 
             if (data != null && method != "GET")
             {
