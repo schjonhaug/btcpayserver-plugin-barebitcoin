@@ -206,7 +206,7 @@ public class BareBitcoinLightningClient : ILightningClient
         var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
         // A payment hash is not proof of payment, so only a preimage that hashes to it is reported.
         var preimage = status == LightningInvoiceStatus.Paid ?
-            VerifiedPreimage(responseObj["preimage"]?.Value<string>(), bolt11.PaymentHash!) :
+            VerifiedPreimage(responseObj["preimage"]?.Value<string>(), bolt11.PaymentHash) :
             null;
 
         var result = new LightningInvoice
@@ -542,9 +542,9 @@ public class BareBitcoinLightningClient : ILightningClient
     /// <summary>
     /// Returns the provider preimage only when it hashes to the invoice's payment hash.
     /// </summary>
-    internal static string? VerifiedPreimage(string? preimage, uint256 paymentHash)
+    internal static string? VerifiedPreimage(string? preimage, uint256? paymentHash)
     {
-        if (string.IsNullOrWhiteSpace(preimage))
+        if (paymentHash is null || string.IsNullOrWhiteSpace(preimage))
             return null;
 
         preimage = preimage.Trim();

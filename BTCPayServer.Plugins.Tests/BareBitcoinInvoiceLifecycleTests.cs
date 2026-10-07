@@ -564,6 +564,8 @@ public class BareBitcoinInvoiceLifecycleTests
 
         Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage(preimage, paymentHash));
         Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage(preimage.ToUpperInvariant(), paymentHash));
+        Assert.Equal(preimage, BareBitcoinLightningClient.VerifiedPreimage($" {preimage} ", paymentHash));
+        Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(preimage, null));
         Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(null, paymentHash));
         Assert.Null(BareBitcoinLightningClient.VerifiedPreimage("", paymentHash));
         Assert.Null(BareBitcoinLightningClient.VerifiedPreimage(paymentHash.ToString(), paymentHash));
