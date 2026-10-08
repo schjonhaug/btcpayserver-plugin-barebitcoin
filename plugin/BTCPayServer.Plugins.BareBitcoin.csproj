@@ -8,7 +8,7 @@
     <PropertyGroup>
         <Product>Bare Bitcoin</Product>
         <Description>Receive Lightning payments into your Bare Bitcoin account and view your balance in BTCPay Server. Sending sats from Bare Bitcoin through BTCPay Server, including refunds, is not supported.</Description>
-        <Version>2.0.2</Version>
+        <Version>2.1.0</Version>
         <Authors>Andreas Schjønhaug</Authors>
         <Company>Enogtjue</Company>
         <RepositoryUrl>https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin</RepositoryUrl>
