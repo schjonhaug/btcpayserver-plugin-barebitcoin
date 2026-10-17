@@ -565,6 +565,24 @@
             ],
             "type": "string",
             "format": "enum"
+          },
+          "expiresAt": {
+            "type": "string",
+            "description": "When the invoice stops being payable. This is the expiry encoded into the\n invoice itself, so a payer's wallet enforces it too.",
+            "format": "date-time"
+          },
+          "amountReceivedMillisatoshi": {
+            "type": "string",
+            "description": "The amount the payer sent, in millisatoshis. Set only when the invoice is\n paid. It is never less than the amount encoded in the invoice, but can be\n more: Lightning nodes accept overpayment."
+          },
+          "paidAt": {
+            "type": "string",
+            "description": "When the invoice was paid. Set only when the invoice is paid.",
+            "format": "date-time"
+          },
+          "preimage": {
+            "type": "string",
+            "description": "The payment preimage, hex encoded. Its SHA-256 hash is the payment hash\n encoded in the invoice, so it is proof of payment. Set only when the\n invoice is paid."
           }
         }
       },
@@ -664,7 +682,7 @@
           },
           "amount": {
             "type": "number",
-            "description": "The amount of the invoice, in the requested currency.",
+            "description": "The amount of the invoice, in the requested currency. Setting to 0\n creates an invoice where any amount is accepted.",
             "format": "double"
           },
           "publicDescription": {
