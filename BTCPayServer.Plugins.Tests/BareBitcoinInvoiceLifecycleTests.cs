@@ -242,46 +242,113 @@ public class BareBitcoinInvoiceLifecycleTests
     }
 
     [Fact]
-    public async Task CreateInvoice_AmountlessTopUpIsRejectedBeforeContactingProvider()
+    public async Task CreateInvoice_AmountlessTopUpRequestsAnInvoiceForAnyAmount()
     {
         var invoiceService = new RecordingInvoiceService();
         var provider = new RecordingResponseHandler(CreateResponse("amountless-id", AmountlessBolt11));
         var client = CreateClient(provider, invoiceService, timeProvider: AtInvoiceTimestamp(AmountlessBolt11));
 
-        var exception = await Assert.ThrowsAsync<NotSupportedException>(() => client.CreateInvoice(
+        var created = await client.CreateInvoice(
             new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromHours(1)),
+            TestContext.Current.CancellationToken);
+
+        var requestBody = JObject.Parse(Assert.Single(provider.RequestBodies));
+        Assert.Equal(0m, requestBody.Value<decimal>("amount"));
+        Assert.Equal(AmountlessBolt11, created.Id);
+        Assert.Equal(LightMoney.Zero, created.Amount);
+        Assert.Equal([new ScopedInvoiceCall(Scope("test-account"), AmountlessBolt11)], invoiceService.TrackCalls);
+    }
+
+    [Fact]
+    public async Task CreateInvoice_FixedAmountBolt11ForTopUpFailsWithoutTracking()
+    {
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(CreateResponse("fixed-id", AmountBearingBolt11)),
+            invoiceService,
+            timeProvider: AtInvoiceTimestamp(AmountBearingBolt11));
+
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(() => client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromMinutes(1)),
             TestContext.Current.CancellationToken));
 
-        Assert.Contains("LNURL", exception.Message, StringComparison.Ordinal);
-        Assert.Equal(0, provider.RequestCount);
+        Assert.Contains("amount", exception.Message, StringComparison.OrdinalIgnoreCase);
         Assert.Empty(invoiceService.TrackCalls);
     }
 
     [Fact]
-    public async Task TrackedAmountlessInvoiceReportedPaid_IsNotCreditedAsZero()
+    public async Task AmountlessTopUpPaid_IsDeliveredAndCreditedTheAmountPaid()
     {
-        const string accountId = "legacy-amountless-owner";
+        const string accountId = "amountless-top-up-owner";
+        var paidAmount = LightMoney.Satoshis(1_234);
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new LifecycleProviderHandler("amountless-top-up-id", AmountlessBolt11, paidAmount.MilliSatoshi),
+            invoiceService,
+            accountId,
+            AtInvoiceTimestamp(AmountlessBolt11));
+
+        var created = await client.CreateInvoice(
+            new CreateInvoiceParams(LightMoney.Zero, "top-up", TimeSpan.FromHours(1)),
+            TestContext.Current.CancellationToken);
+        using var listener = await client.Listen(TestContext.Current.CancellationToken);
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var delivered = await listener.WaitInvoice(timeout.Token);
+
+        Assert.Equal(created.Id, delivered.Id);
+        Assert.Equal(LightningInvoiceStatus.Paid, delivered.Status);
+        Assert.Equal(LightMoney.Zero, delivered.Amount);
+        Assert.Equal(paidAmount, delivered.AmountReceived);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task AmountlessInvoicePaidWithoutAmountReceived_StaysTrackedUntilTheAmountIsReported(bool explicitNull)
+    {
+        const string accountId = "amountless-owner";
         var scope = Scope(accountId);
         var invoiceService = new RecordingInvoiceService();
         await invoiceService.TrackInvoice(scope, AmountlessBolt11, TestContext.Current.CancellationToken);
-        var client = CreateClient(
-            new StaticResponseHandler(GetResponse(AmountlessBolt11, "INVOICE_STATUS_PAID")),
-            invoiceService,
-            accountId);
+        var provider = new SwitchableResponseHandler(GetResponse(
+            AmountlessBolt11,
+            "INVOICE_STATUS_PAID",
+            amountReceivedMillisatoshi: explicitNull ? JValue.CreateNull() : null));
+        var client = CreateClient(provider, invoiceService, accountId);
 
-        Assert.Null(await client.GetInvoice(AmountlessBolt11, TestContext.Current.CancellationToken));
+        // Not credited as zero, and still tracked: returning nothing would make BTCPay stop monitoring it.
+        var invoice = await client.GetInvoice(AmountlessBolt11, TestContext.Current.CancellationToken);
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Unpaid, invoice.Status);
+        Assert.Null(invoice.AmountReceived);
 
-        // The listener polls as soon as it starts, so a second is ample for a wrongful delivery to show up.
         using var listener = await client.Listen(TestContext.Current.CancellationToken);
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
-        timeout.CancelAfter(TimeSpan.FromSeconds(1));
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listener.WaitInvoice(timeout.Token));
+        timeout.CancelAfter(TimeSpan.FromSeconds(10));
+        var requestsBeforeListening = provider.RequestCount;
+        await WaitUntilAsync(() => Task.FromResult(provider.RequestCount > requestsBeforeListening), timeout.Token);
+        Assert.Equal([AmountlessBolt11], await invoiceService.GetTrackedInvoices(scope, timeout.Token));
+        Assert.Empty(invoiceService.UntrackCalls);
+
+        provider.Response = GetResponse(AmountlessBolt11, "INVOICE_STATUS_PAID", amountReceivedMillisatoshi: "1234000");
+        var delivered = await listener.WaitInvoice(timeout.Token);
+
+        Assert.Equal(AmountlessBolt11, delivered.Id);
+        Assert.Equal(LightningInvoiceStatus.Paid, delivered.Status);
+        Assert.Equal(LightMoney.Satoshis(1_234), delivered.AmountReceived);
+        await WaitUntilAsync(async () => (await invoiceService.GetTrackedInvoices(scope, timeout.Token)).Count == 0, timeout.Token);
+
+        // Delivered once: the invoice is no longer tracked, so it is not polled or delivered again.
+        using var redelivery = CancellationTokenSource.CreateLinkedTokenSource(TestContext.Current.CancellationToken);
+        redelivery.CancelAfter(TimeSpan.FromSeconds(1));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => listener.WaitInvoice(redelivery.Token));
     }
 
     [Fact]
     public async Task TopUpPaidThroughFixedAmountInvoice_IsDeliveredWithTheAmountPaid()
     {
-        // BTCPay serves top-ups through LNURL, which creates a fixed-amount invoice for the amount the payer chose.
+        // LNURL top-ups create a fixed-amount invoice for the amount the payer chose.
         const string accountId = "top-up-owner";
         var paidAmount = LightMoney.Satoshis(250_000);
         var invoiceService = new RecordingInvoiceService();
@@ -457,6 +524,158 @@ public class BareBitcoinInvoiceLifecycleTests
         Assert.Empty(invoiceService.TrackCalls);
         Assert.Empty(invoiceService.UntrackCalls);
         Assert.Equal([new ScopedInvoiceCall(scope, invoiceId)], invoiceService.ClaimCalls);
+    }
+
+    [Fact]
+    public void TestBolt11_SignsAnInvoiceThatCommitsToThePreimage()
+    {
+        var preimage = Enumerable.Range(1, 32).Select(b => (byte)b).ToArray();
+        var timestamp = DateTimeOffset.FromUnixTimeSeconds(1_700_000_000);
+
+        var bolt11 = TestBolt11.Parse(TestBolt11.Create(preimage, timestamp, 1_000));
+
+        Assert.True(bolt11.VerifySignature());
+        Assert.Equal(LightMoney.Satoshis(1_000), bolt11.MinimumAmount);
+        Assert.Equal(timestamp, bolt11.Timestamp);
+        Assert.Equal(NBitcoin.Crypto.Hashes.SHA256(preimage), bolt11.PaymentHash!.ToBytes(false));
+    }
+
+    [Theory]
+    [InlineData("yyyy-MM-ddTHH:mm:ssZ", 0)]
+    [InlineData("yyyy-MM-ddTHH:mm:ss.fffffffK", 0)]
+    [InlineData("yyyy-MM-ddTHH:mm:ss.fffzzz", 2)]
+    [InlineData("yyyy-MM-ddTHH:mm:sszzz", -5)]
+    public async Task GetInvoice_PaidReportsTheProviderSettlement(string paidAtFormat, int offsetHours)
+    {
+        var preimage = Enumerable.Range(1, 32).Select(b => (byte)b).ToArray();
+        var bolt11 = TestBolt11.Create(preimage, 1_000);
+        var paidAt = (TestBolt11.Parse(bolt11).Timestamp + TimeSpan.FromSeconds(7.25))
+            .ToOffset(TimeSpan.FromHours(offsetHours));
+        var reportedPaidAt = paidAt.ToString(paidAtFormat, System.Globalization.CultureInfo.InvariantCulture);
+        var invoiceService = new RecordingInvoiceService();
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(
+                bolt11,
+                "INVOICE_STATUS_PAID",
+                Convert.ToHexStringLower(preimage),
+                "1500000",
+                reportedPaidAt)),
+            invoiceService);
+
+        var invoice = await client.GetInvoice(bolt11, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+        Assert.Equal(LightMoney.Satoshis(1_000), invoice.Amount);
+        // Lightning accepts overpayment, and the payer is credited with what they sent.
+        Assert.Equal(LightMoney.Satoshis(1_500), invoice.AmountReceived);
+        Assert.Equal(DateTimeOffset.Parse(reportedPaidAt, System.Globalization.CultureInfo.InvariantCulture), invoice.PaidAt);
+        Assert.Equal(TimeSpan.Zero, invoice.PaidAt!.Value.Offset);
+        Assert.Equal(Convert.ToHexStringLower(preimage), invoice.Preimage);
+    }
+
+    [Fact]
+    public async Task GetInvoice_PaidAcceptsAnAmountReceivedSentAsANumber()
+    {
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(AmountlessBolt11, "INVOICE_STATUS_PAID", amountReceivedMillisatoshi: 1_000)),
+            new RecordingInvoiceService());
+
+        var invoice = await client.GetInvoice(AmountlessBolt11, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightMoney.Satoshis(1), invoice.AmountReceived);
+    }
+
+    [Theory]
+    [InlineData("\"249999999\"")]
+    [InlineData("\"0\"")]
+    [InlineData("\"-1\"")]
+    [InlineData("\"1.5\"")]
+    [InlineData("\"lots\"")]
+    [InlineData("true")]
+    [InlineData("{}")]
+    public async Task GetInvoice_PaidWithAnInvalidAmountReceivedIsReportedUnpaidAndStaysTracked(string amountReceived)
+    {
+        const string invoiceId = "invalid-amount-id";
+        const string accountId = "invalid-amount-owner";
+        var scope = Scope(accountId);
+        var invoiceService = new RecordingInvoiceService();
+        await invoiceService.TrackInvoice(scope, invoiceId, TestContext.Current.CancellationToken);
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(
+                AmountBearingBolt11,
+                "INVOICE_STATUS_PAID",
+                amountReceivedMillisatoshi: JToken.Parse(amountReceived))),
+            invoiceService,
+            accountId);
+
+        var invoice = await client.GetInvoice(invoiceId, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Unpaid, invoice.Status);
+        Assert.Null(invoice.AmountReceived);
+        Assert.Null(invoice.PaidAt);
+        Assert.Null(invoice.Preimage);
+        Assert.Equal([invoiceId], await invoiceService.GetTrackedInvoices(
+            scope, TestContext.Current.CancellationToken));
+        Assert.Empty(invoiceService.UntrackCalls);
+    }
+
+    [Theory]
+    [InlineData(-3_600)]
+    [InlineData(7 * 24 * 3_600)]
+    public async Task GetInvoice_PaidAtOutsideTheInvoiceLifetimeIsNotReported(int secondsFromNow)
+    {
+        var bolt11 = TestBolt11.Create(new byte[32], 1_000);
+        var paidAt = DateTimeOffset.UtcNow.AddSeconds(secondsFromNow);
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(
+                bolt11,
+                "INVOICE_STATUS_PAID",
+                paidAt: paidAt.ToString("O", System.Globalization.CultureInfo.InvariantCulture))),
+            new RecordingInvoiceService());
+
+        var invoice = await client.GetInvoice(bolt11, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Equal(LightningInvoiceStatus.Paid, invoice.Status);
+        Assert.Null(invoice.PaidAt);
+    }
+
+    [Fact]
+    public async Task GetInvoice_UnreadablePaidAtIsNotReported()
+    {
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(AmountBearingBolt11, "INVOICE_STATUS_PAID", paidAt: "yesterday")),
+            new RecordingInvoiceService());
+
+        var invoice = await client.GetInvoice(AmountBearingBolt11, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Null(invoice.PaidAt);
+    }
+
+    [Fact]
+    public async Task GetInvoice_UnpaidIgnoresSettlementFields()
+    {
+        var preimage = new byte[32];
+        var bolt11 = TestBolt11.Create(preimage, 1_000);
+        var client = CreateClient(
+            new StaticResponseHandler(GetResponse(
+                bolt11,
+                "INVOICE_STATUS_UNPAID",
+                Convert.ToHexStringLower(preimage),
+                "1000000",
+                DateTimeOffset.UtcNow.ToString("O", System.Globalization.CultureInfo.InvariantCulture))),
+            new RecordingInvoiceService());
+
+        var invoice = await client.GetInvoice(bolt11, TestContext.Current.CancellationToken);
+
+        Assert.NotNull(invoice);
+        Assert.Null(invoice.AmountReceived);
+        Assert.Null(invoice.PaidAt);
+        Assert.Null(invoice.Preimage);
     }
 
     [Fact]
@@ -692,13 +911,22 @@ public class BareBitcoinInvoiceLifecycleTests
         return response.ToString(Formatting.None);
     }
 
-    private static string GetResponse(string bolt11, string? status, string? preimage = null)
+    private static string GetResponse(
+        string bolt11,
+        string? status,
+        string? preimage = null,
+        JToken? amountReceivedMillisatoshi = null,
+        string? paidAt = null)
     {
         var response = new JObject { ["invoice"] = bolt11 };
         if (status is not null)
             response["status"] = status;
         if (preimage is not null)
             response["preimage"] = preimage;
+        if (amountReceivedMillisatoshi is not null)
+            response["amountReceivedMillisatoshi"] = amountReceivedMillisatoshi;
+        if (paidAt is not null)
+            response["paidAt"] = paidAt;
         return response.ToString(Formatting.None);
     }
 
@@ -735,6 +963,22 @@ public class BareBitcoinInvoiceLifecycleTests
             Task.FromResult(JsonResponse(response));
     }
 
+    private sealed class SwitchableResponseHandler(string response) : HttpMessageHandler
+    {
+        private int _requestCount;
+
+        public volatile string Response = response;
+        public int RequestCount => Volatile.Read(ref _requestCount);
+
+        protected override Task<HttpResponseMessage> SendAsync(
+            HttpRequestMessage request,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _requestCount);
+            return Task.FromResult(JsonResponse(Response));
+        }
+    }
+
     private sealed class RecordingResponseHandler(string response) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _requestBodies = new();
@@ -754,7 +998,7 @@ public class BareBitcoinInvoiceLifecycleTests
         }
     }
 
-    private sealed class LifecycleProviderHandler(string invoiceId, string bolt11) : HttpMessageHandler
+    private sealed class LifecycleProviderHandler(string invoiceId, string bolt11, long? amountReceivedMillisatoshi = null) : HttpMessageHandler
     {
         private readonly ConcurrentQueue<string> _queriedInvoiceIds = new();
 
@@ -777,7 +1021,8 @@ public class BareBitcoinInvoiceLifecycleTests
             return Task.FromResult(JsonResponse(GetResponse(
                 bolt11,
                 "INVOICE_STATUS_PAID",
-                "provider-preimage-" + invoiceId)));
+                "provider-preimage-" + invoiceId,
+                amountReceivedMillisatoshi is { } received ? received.ToString(System.Globalization.CultureInfo.InvariantCulture) : null)));
         }
     }
 

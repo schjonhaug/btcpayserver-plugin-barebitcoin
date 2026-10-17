@@ -2,6 +2,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -38,6 +39,8 @@ public class BareBitcoinLightningClient : ILightningClient
     private readonly int _maxRetries;
     private readonly LogThrottle _persistenceWarningThrottle;
     private readonly ConcurrentDictionary<string, DateTimeOffset> _rateLimitBackoff = new();
+    // Paid invoices whose settlement could not be credited, so each is logged as an error once.
+    private readonly ConcurrentDictionary<string, byte> _reportedSettlementProblems = new();
     public ILogger Logger;
 
     private ILightningInvoiceListener? _currentListener;
@@ -193,22 +196,38 @@ public class BareBitcoinLightningClient : ILightningClient
         var amount = bolt11.MinimumAmount;
         var paymentHash = bolt11.PaymentHash?.ToString() ?? string.Empty;
 
-        // The lookup does not report the amount received, so a paid invoice is only credited
-        // with its encoded amount. Amountless invoices are no longer created, but one tracked by
-        // an earlier version must not be reported as a settled zero-value payment.
-        if (status == LightningInvoiceStatus.Paid && amount == LightMoney.Zero)
+        LightMoney? amountReceived = null;
+        DateTimeOffset? paidAt = null;
+        string? preimage = null;
+        if (status == LightningInvoiceStatus.Paid)
         {
-            Logger.LogError(
-                "Bare Bitcoin reports amountless invoice {InvoiceId} as paid without the amount received; it cannot be credited automatically and must be reconciled manually",
-                invoiceId);
-            return null;
+            (amountReceived, var problem) = ReceivedAmount(responseObj["amountReceivedMillisatoshi"], amount);
+            if (problem is not null)
+            {
+                // Reported as unpaid so the plugin and BTCPay keep tracking the invoice until the
+                // provider reports a usable amount. Returning nothing would end tracking, and
+                // throwing would stop BTCPay from processing the store's other invoices.
+                if (_reportedSettlementProblems.TryAdd(invoiceId, 0))
+                    Logger.LogError(
+                        "Bare Bitcoin reports invoice {InvoiceId} as paid, but {Problem}; it is not credited until a valid amount received is reported",
+                        invoiceId, problem);
+                status = LightningInvoiceStatus.Unpaid;
+            }
         }
 
-        var amountReceived = status == LightningInvoiceStatus.Paid ? amount : null;
-        // A payment hash is not proof of payment, so only a preimage that hashes to it is reported.
-        var preimage = status == LightningInvoiceStatus.Paid ?
-            VerifiedPreimage(responseObj["preimage"]?.Value<string>(), bolt11.PaymentHash) :
-            null;
+        if (status == LightningInvoiceStatus.Paid)
+        {
+            _reportedSettlementProblems.TryRemove(invoiceId, out _);
+            paidAt = ProviderPaidAt(invoiceId, responseObj["paidAt"], bolt11);
+
+            // A payment hash is not proof of payment, so only a preimage that hashes to it is reported.
+            var providerPreimage = responseObj["preimage"]?.Value<string>();
+            preimage = VerifiedPreimage(providerPreimage, bolt11.PaymentHash);
+            if (preimage is null && !string.IsNullOrWhiteSpace(providerPreimage))
+                Logger.LogWarning(
+                    "Bare Bitcoin returned a preimage for invoice {InvoiceId} that does not hash to its payment hash; reporting none",
+                    invoiceId);
+        }
 
         var result = new LightningInvoice
         {
@@ -219,9 +238,7 @@ public class BareBitcoinLightningClient : ILightningClient
             AmountReceived = amountReceived,
             ExpiresAt = bolt11.ExpiryDate,
             PaymentHash = paymentHash,
-            // The lookup does not report when the invoice was paid, and the polling time must not
-            // stand in for it: BTCPay then records the payment at the time it detects it.
-            PaidAt = null,
+            PaidAt = paidAt,
             Preimage = preimage
         };
 
@@ -300,6 +317,11 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 if (!trackedInvoices.Contains(key))
                     _rateLimitBackoff.TryRemove(key, out _);
+            }
+            foreach (var key in _reportedSettlementProblems.Keys)
+            {
+                if (!trackedInvoices.Contains(key))
+                    _reportedSettlementProblems.TryRemove(key, out _);
             }
 
             await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
@@ -421,11 +443,11 @@ public class BareBitcoinLightningClient : ILightningClient
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
-            // Bare Bitcoin does not report the amount an amountless invoice received, so it could only
-            // be credited as zero. BTCPay then offers top-ups through LNURL, which requests a fixed amount.
-            if (createInvoiceRequest.Amount is null || createInvoiceRequest.Amount <= LightMoney.Zero)
-                throw new NotSupportedException(
-                    "Bare Bitcoin does not report the amount received for amountless invoices, so they cannot be credited correctly. Use LNURL for top-ups");
+            // BTCPay requests a zero amount for top-ups. Bare Bitcoin then creates an invoice that
+            // accepts any amount and reports what was received once it is paid.
+            var requestedAmount = createInvoiceRequest.Amount ?? LightMoney.Zero;
+            if (requestedAmount < LightMoney.Zero)
+                throw new ArgumentOutOfRangeException(nameof(createInvoiceRequest), "The invoice amount cannot be negative");
 
             var expirySeconds = ToProviderExpirySeconds(createInvoiceRequest.Expiry);
             var requestedExpiryDate = _timeProvider.GetUtcNow() + createInvoiceRequest.Expiry;
@@ -433,7 +455,7 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 accountId = _accountId,
                 currency = "CURRENCY_BTC",
-                amount = createInvoiceRequest.Amount.ToDecimal(LightMoneyUnit.BTC),
+                amount = requestedAmount.ToDecimal(LightMoneyUnit.BTC),
                 publicDescription = createInvoiceRequest.Description,
                 internalDescription = FormattableString.Invariant($"BTCPay Server Invoice - {_timeProvider.GetUtcNow():yyyy-MM-dd HH:mm:ss}"),
                 expirySeconds
@@ -452,7 +474,7 @@ public class BareBitcoinLightningClient : ILightningClient
                 throw new InvalidOperationException("Bare Bitcoin returned no BOLT11 invoice");
 
             var bolt11 = ParseProviderInvoice(invoice);
-            ValidateCreatedInvoice(createInvoiceRequest, bolt11, requestedExpiryDate);
+            ValidateCreatedInvoice(requestedAmount, bolt11, requestedExpiryDate);
 
             // The lookup API explicitly supports the complete BOLT11. Using it
             // as the identifier also preserves the expected payment hash, so
@@ -519,15 +541,15 @@ public class BareBitcoinLightningClient : ILightningClient
     }
 
     private void ValidateCreatedInvoice(
-        CreateInvoiceParams request,
+        LightMoney requestedAmount,
         BOLT11PaymentRequest bolt11,
         DateTimeOffset requestedExpiryDate)
     {
         var returnedAmount = bolt11.MinimumAmount;
-        if (returnedAmount == LightMoney.Zero || returnedAmount != request.Amount)
+        if (returnedAmount != requestedAmount)
         {
             throw new InvalidOperationException(
-                $"Bare Bitcoin returned a BOLT11 amount of {returnedAmount}, expected {request.Amount}");
+                $"Bare Bitcoin returned a BOLT11 amount of {returnedAmount}, expected {requestedAmount}");
         }
 
         var now = _timeProvider.GetUtcNow();
@@ -540,6 +562,65 @@ public class BareBitcoinLightningClient : ILightningClient
             throw new InvalidOperationException(
                 $"Bare Bitcoin returned a BOLT11 expiring at {bolt11.ExpiryDate:O}, outside the requested monitoring deadline {requestedExpiryDate:O}");
         }
+    }
+
+    /// <summary>
+    /// Returns the amount the provider reports the payer sent, or why it cannot be credited.
+    /// Without one, a fixed-amount invoice falls back to its encoded amount, which a paid invoice
+    /// received at least. An amountless invoice has no amount to fall back on.
+    /// </summary>
+    private static (LightMoney? Amount, string? Problem) ReceivedAmount(JToken? token, LightMoney encodedAmount)
+    {
+        if (token is null || token.Type == JTokenType.Null)
+            return encodedAmount == LightMoney.Zero ?
+                (null, "it reports no amount received for the amountless invoice") :
+                (encodedAmount, null);
+
+        // The provider sends 64-bit integers as strings.
+        if (token.Type is not (JTokenType.String or JTokenType.Integer) ||
+            !long.TryParse(token.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out var millisatoshis) ||
+            millisatoshis <= 0)
+            return (null, "the amount received is invalid");
+
+        // Lightning accepts overpayment, but never less than the encoded amount.
+        var received = LightMoney.MilliSatoshis(millisatoshis);
+        if (received < encodedAmount)
+            return (null, $"the amount received of {received} is less than the invoice amount of {encodedAmount}");
+        return (received, null);
+    }
+
+    /// <summary>
+    /// Returns the provider's payment time when it falls between the invoice's creation and now.
+    /// Otherwise none is reported, and BTCPay records the payment at the time it detects it.
+    /// </summary>
+    private DateTimeOffset? ProviderPaidAt(string invoiceId, JToken? token, BOLT11PaymentRequest bolt11)
+    {
+        DateTimeOffset? paidAt = token?.Type switch
+        {
+            // Newtonsoft converts ISO 8601 strings to dates while parsing.
+            JTokenType.Date when token is JValue { Value: DateTime date } =>
+                new DateTimeOffset(date.Kind == DateTimeKind.Unspecified ? DateTime.SpecifyKind(date, DateTimeKind.Utc) : date),
+            JTokenType.Date when token is JValue { Value: DateTimeOffset dateTimeOffset } => dateTimeOffset,
+            JTokenType.String when DateTimeOffset.TryParse(
+                token.Value<string>(), CultureInfo.InvariantCulture, DateTimeStyles.AssumeUniversal, out var parsed) => parsed,
+            _ => null
+        };
+        if (token is not null && token.Type != JTokenType.Null && paidAt is null)
+        {
+            Logger.LogWarning("Bare Bitcoin returned an unreadable payment time for invoice {InvoiceId}; reporting none", invoiceId);
+            return null;
+        }
+
+        if (paidAt is { } time &&
+            (time < bolt11.Timestamp - InvoiceExpiryTolerance || time > _timeProvider.GetUtcNow() + InvoiceExpiryTolerance))
+        {
+            Logger.LogWarning(
+                "Bare Bitcoin reports invoice {InvoiceId} paid at {PaidAt}, outside its lifetime so far; reporting no payment time",
+                invoiceId, time);
+            return null;
+        }
+
+        return paidAt?.ToUniversalTime();
     }
 
     /// <summary>
