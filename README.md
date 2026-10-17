@@ -82,11 +82,16 @@ Install the [.NET 10.0 SDK](https://dotnet.microsoft.com/download/dotnet/10.0). 
 
 This branch supports BTCPay Server `2.3.7` and newer at runtime.
 
-Release builds target the BTCPay Server version the tracked submodule points at, currently `2.4.4`. Plugin Builder builds from that submodule, so its version decides which BTCPay transitive dependencies a release build reports.
+Release builds target the BTCPay Server version the tracked submodule points at, currently `2.4.5`. Plugin Builder builds from that submodule, so its version decides which BTCPay transitive dependencies a release build reports.
 
-One such warning remains: `NU1902` for `Microsoft.Build.Tasks.Git` 8.0.0, reached through SourceLink as a build-time dependency with `PrivateAssets="All"`. It is not shipped in the plugin package, the 8.0.x line has no patched release, and upgrading it is BTCPay's call.
+The build reports three warnings from BTCPay's own dependencies, all for advisories published on 2026-10-13, after BTCPay `2.4.5` was released:
 
-Until the submodule moved to `2.4.4` there were also two `NU1903` warnings for `SSH.NET` 2025.1.0, which the v2.0.2 release build reported. Both advisories concern `ScpClient`, which neither this plugin nor BTCPay calls, and BTCPay dropped the dependency after `2.4.2`.
+- `NU1902` and `NU1903` for `System.Security.Cryptography.Pkcs` 10.0.0 ([GHSA-2fmv-rv2c-59x7](https://github.com/advisories/GHSA-2fmv-rv2c-59x7), [GHSA-846f-f764-76mx](https://github.com/advisories/GHSA-846f-f764-76mx))
+- `NU1903` for `Microsoft.AspNetCore.SignalR.Common` 10.0.12 ([GHSA-334f-vvp4-7g6p](https://github.com/advisories/GHSA-334f-vvp4-7g6p))
+
+All three are denial-of-service issues fixed in 10.0.13. The plugin package ships neither library, since BTCPay Server provides them at runtime, so the fix comes with a BTCPay release that updates them.
+
+Earlier warnings are gone: `NU1902` for `Microsoft.Build.Tasks.Git` 8.0.0 since BTCPay `2.4.5` moved SourceLink to 10.0.111, and two `NU1903` for `SSH.NET` 2025.1.0 since BTCPay dropped that dependency after `2.4.2`.
 
 Use one of these BTCPay Server source layouts:
 
