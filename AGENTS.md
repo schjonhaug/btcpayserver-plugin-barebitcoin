@@ -9,6 +9,8 @@ git submodule update --init --recursive
 dotnet test BTCPayServer.Plugins.Tests
 ```
 
+To try a build on a BTCPay Server test instance, package it the way `pluginpacker.sh` does and run `scripts/install-test-plugin.sh`. It signs in as a server admin, uploads the package and restarts BTCPay; the script header lists the settings it reads.
+
 ## Invariants
 
 These matter most, both when changing code and when reviewing it. Prioritize correctness and security issues that can cause lost or misattributed payments, cross-store data access, credential disclosure, or state corruption.
