@@ -28,7 +28,10 @@ for arg in "$@"; do
     --no-restart) restart=false ;;
     -h|--help) usage; exit 0 ;;
     -*) echo "Unknown option: $arg" >&2; usage; exit 1 ;;
-    *) package="$arg" ;;
+    *)
+      if [ -n "$package" ]; then echo "Pass a single plugin package." >&2; usage; exit 1; fi
+      package="$arg"
+      ;;
   esac
 done
 package="${package:-$repoRoot/plugin/tmp/out/BTCPayServer.Plugins.BareBitcoin.btcpay}"
@@ -44,7 +47,7 @@ if [ -f "$envFile" ]; then
 fi
 for name in BTCPAY_URL BTCPAY_ADMIN_EMAIL BTCPAY_ADMIN_PASSWORD; do
   if [ -z "${!name:-}" ]; then
-    echo "$name is not set; add it to $envFile." >&2
+    echo "$name is not set; export it or add it to $envFile." >&2
     exit 1
   fi
 done
@@ -65,10 +68,29 @@ antiforgery_token() {
   perl -ne 'if (/name="__RequestVerificationToken"[^>]*value="([^"]+)"/) { print "$1\n"; exit }' "$page"
 }
 
-# Prints the HTTP status and stores the body in $page; redirects are not followed,
-# so a successful form post shows up as a 302.
+# Prints the HTTP status and redirect target and stores the body in $page.
+# Redirects are not followed, so a successful form post shows up as a 302.
 request() {
   curl "${curlOptions[@]}" --output "$page" --write-out '%{http_code} %{redirect_url}\n' "$@"
+}
+
+# A form post only succeeded if BTCPay redirects to the page it returns to on
+# success. A lost session redirects to /login instead, without doing anything.
+expect_redirect() {
+  local action="$1" expectedPath="$2" status location path
+  read -r status location
+  path="${location#"$baseUrl"}"
+  path="${path%%\?*}"
+  if [ "$status" != 302 ] || [ "$path" != "$expectedPath" ]; then
+    echo "$action failed (HTTP $status${location:+, redirected to $location})." >&2
+    exit 1
+  fi
+}
+
+# Prints the version BTCPay lists for the plugin, from the authenticated plugins page.
+installed_version() {
+  request "$baseUrl/server/plugins" >/dev/null || return 0
+  perl -0ne 'if (/id="\Q'"$identifier"'\E".*?<\/h4>.*?<h5[^>]*>\s*([0-9]+(?:\.[0-9]+){1,3})/s) { print "$1\n" }' "$page"
 }
 
 echo "Signing in to $baseUrl as $BTCPAY_ADMIN_EMAIL"
@@ -93,12 +115,19 @@ if [ "$status" != 200 ] || [ -z "$token" ]; then
   exit 1
 fi
 
-# BTCPay takes the plugin identifier from the file name.
-echo "Uploading $(basename "$package")"
-status="$(request "$baseUrl/server/plugins/upload" \
+# BTCPay takes the plugin identifier from the file name. The packer writes the
+# manifest next to the package, which tells which version should end up loaded.
+identifier="$(basename "$package" .btcpay)"
+expectedVersion=""
+if [ -f "$package.json" ]; then
+  expectedVersion="$(perl -MJSON::PP -0ne 'print decode_json($_)->{Version} // ""' "$package.json")"
+fi
+
+echo "Uploading $(basename "$package")${expectedVersion:+ (version $expectedVersion)}"
+request "$baseUrl/server/plugins/upload" \
   --form "__RequestVerificationToken=$token" \
-  --form "files=@$package;filename=$(basename "$package");type=application/octet-stream" | cut -d' ' -f1)"
-[ "$status" = 302 ] || { echo "Upload failed (HTTP $status)." >&2; exit 1; }
+  --form "files=@$package;filename=$(basename "$package");type=application/octet-stream" |
+  expect_redirect "Upload" /server/plugins
 
 if [ "$restart" = false ]; then
   echo "Uploaded. Restart BTCPay Server to load the plugin."
@@ -106,26 +135,42 @@ if [ "$restart" = false ]; then
 fi
 
 echo "Restarting BTCPay Server"
-status="$(request "$baseUrl/server/maintenance" \
+request "$baseUrl/server/maintenance" \
   --data-urlencode "__RequestVerificationToken=$token" \
-  --data-urlencode "command=soft-restart" | cut -d' ' -f1)"
-[ "$status" = 302 ] || [ "$status" = 200 ] || { echo "Restart request failed (HTTP $status)." >&2; exit 1; }
+  --data-urlencode "command=soft-restart" |
+  expect_redirect "Restart request" /server/maintenance
 
-# The restart starts a few seconds after the request, so wait for the server to
-# go down before waiting for it to come back.
 health() {
   curl "${curlOptions[@]}" --max-time 5 --output /dev/null --write-out '%{http_code}' "$baseUrl/api/v1/health" 2>/dev/null || true
 }
-for _ in $(seq 1 30); do
-  [ "$(health)" = 200 ] || break
+
+# BTCPay stops a few seconds after the request. Until it has been seen down, a
+# healthy response still comes from the process running the old plugin.
+deadline=$((SECONDS + 60))
+until [ "$(health)" != 200 ]; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "BTCPay Server did not restart within 60 seconds; the uploaded plugin is not loaded yet." >&2
+    exit 1
+  fi
   sleep 1
 done
-for _ in $(seq 1 120); do
-  if [ "$(health)" = 200 ]; then
-    echo "BTCPay Server is back up with the uploaded plugin."
-    exit 0
+
+deadline=$((SECONDS + 240))
+until [ "$(health)" = 200 ]; do
+  if [ "$SECONDS" -ge "$deadline" ]; then
+    echo "BTCPay Server did not come back within 4 minutes." >&2
+    exit 1
   fi
   sleep 2
 done
-echo "BTCPay Server did not come back within 4 minutes." >&2
-exit 1
+
+if [ -z "$expectedVersion" ]; then
+  echo "BTCPay Server is back up. No manifest next to the package, so the loaded version was not checked."
+  exit 0
+fi
+loadedVersion="$(installed_version)"
+if [ "$loadedVersion" != "$expectedVersion" ]; then
+  echo "BTCPay Server is back up, but lists $identifier as ${loadedVersion:-not installed} instead of $expectedVersion." >&2
+  exit 1
+fi
+echo "BTCPay Server is back up with $identifier $loadedVersion."
