@@ -15,9 +15,13 @@ Integrate your [Bare Bitcoin](https://barebitcoin.no) account with BTCPay Server
 
 **Checkout expiry between 1 minute and 24 hours** — Bare Bitcoin creates invoices that stay payable for 60 seconds to 24 hours, and the plugin forwards the store's remaining checkout window rather than accepting a mismatched lifetime. Lightning payments fail outside that range. Keep the store invoice expiration at 2 minutes or more: a 1-minute expiration leaves less than 60 seconds once BTCPay has processed the checkout, which rejects the invoice intermittently.
 
-**Top-ups through LNURL only** — Bare Bitcoin does not report how much an amountless invoice received, so the plugin cannot credit one correctly and refuses to create it. For top-up invoices BTCPay then offers no plain BOLT11, and the payer pays through LNURL, which creates an invoice for the amount they choose.
+## Payment details
 
-**No payment time or proof of payment** — Bare Bitcoin's invoice lookup reports neither when an invoice was paid nor its preimage. The plugin leaves both empty, so BTCPay records the payment at the time it detects it.
+Once an invoice is paid, Bare Bitcoin reports the amount received, when it was paid, and the preimage. The plugin passes them to BTCPay after checking them:
+
+- **Amount received** — what the payer sent, which can exceed the invoice amount. This is what makes top-up invoices work: BTCPay requests an invoice for any amount, and the payment is credited with the amount actually paid. If the amount is missing for an amountless invoice, invalid, or below the invoice amount, the payment is not recorded: the plugin logs an error and keeps watching the invoice until Bare Bitcoin reports a valid amount.
+- **Payment time** — used only if it falls between the invoice's creation and now. Otherwise BTCPay records the payment at the time it detects it.
+- **Preimage** — reported only if its SHA-256 hash is the invoice's payment hash, so it proves the payment.
 
 ## Tracked Invoice Migration
 
