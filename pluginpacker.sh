@@ -53,7 +53,7 @@ EOF
 
 usage() {
   cat <<EOF
-Usage: $0 <version> [--no-push] [--no-package]
+Usage: $0 <version> [--no-push] [--no-package] [--resume]
 
 Creates a reproducible Plugin Builder pre-release candidate:
   1. validates master, a clean worktree, and the BTCPay Server sources
@@ -77,8 +77,12 @@ EOF
 version=""
 pushRelease=true
 packageLocal=true
+resumeRelease=false
 while [ "$#" -gt 0 ]; do
   case "$1" in
+    --resume)
+      resumeRelease=true
+      ;;
     --no-push)
       pushRelease=false
       ;;
@@ -128,6 +132,22 @@ if [ -n "$(git status --porcelain)" ]; then
   echo "Worktree must be clean before release." >&2
   git status --short >&2
   exit 1
+fi
+
+# Resume only a complete, locally verified release commit/tag pair. Never rebuild,
+# move a tag, or invent a replacement commit after a partial publication.
+if [ "$resumeRelease" = true ]; then
+  if [ "$(git rev-parse "$tag^{commit}")" != "$(git rev-parse HEAD)" ] ||
+     [ "$(git log -1 --format=%s)" != "Release $tag" ] ||
+     ! grep -Fq "<Version>$version</Version>" "$projectFile"; then
+    echo "Resume requires HEAD to be the matching Release $tag commit and tag, with that project version." >&2
+    exit 1
+  fi
+  if [ "$pushRelease" = true ]; then
+    git push --atomic origin master "$tag"
+  fi
+  echo "Release $tag is ready for Plugin Builder: $pluginBuilderUrl"
+  exit 0
 fi
 
 if git rev-parse "$tag" >/dev/null 2>&1; then
@@ -203,11 +223,17 @@ fi
 git add "$projectFile"
 git commit -m "Release $tag"
 projectFileCommitted=true
-git tag "$tag"
+if ! git tag "$tag"; then
+  echo "Release commit is retained. Inspect HEAD and existing tags before creating $tag and pushing atomically." >&2
+  exit 1
+fi
 
 if [ "$pushRelease" = true ]; then
-  git push origin master
-  git push origin "$tag"
+  if ! git push --atomic origin master "$tag"; then
+    echo "Release commit and tag are retained locally. Inspect remote refs, then resume with:" >&2
+    echo "  $0 $version --resume" >&2
+    exit 1
+  fi
 else
   echo "Skipping push because --no-push was passed."
 fi

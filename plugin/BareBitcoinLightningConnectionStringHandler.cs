@@ -122,30 +122,27 @@ public class BareBitcoinLightningConnectionStringHandler : ILightningConnectionS
             }
         }
 
+        if (string.IsNullOrWhiteSpace(publicKey) || publicKey.AsSpan().ContainsAny('\r', '\n'))
+        {
+            error = "The public key must be a nonempty HTTP header value";
+            return null;
+        }
+        try
+        {
+            if (Convert.FromBase64String(privateKey).Length == 0) throw new FormatException();
+        }
+        catch (FormatException)
+        {
+            error = "The private key must be a nonempty Base64 secret";
+            return null;
+        }
+
         error = null;
 
         var client = _httpClientFactory.CreateClient();
 
         client.BaseAddress = uri;
-
-        
-
-        var bclient = new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network, client, _loggerFactory.CreateLogger($"{nameof(BareBitcoinLightningClient)}"), _invoiceService, maxPollConcurrency, listenerHub: _listenerHub);
-      
-
-        try
-            {
-                bclient.GetBalance().GetAwaiter().GetResult();
-            }
-            catch (Exception e)
-            {
-                _loggerFactory.CreateLogger(nameof(BareBitcoinLightningConnectionStringHandler)).LogError(e, "Failed to parse BareBitcoin connection string");
-                return null;
-            }
-      
-      
-       
-
-        return bclient;
+        return new BareBitcoinLightningClient(privateKey, publicKey, accountId, storeId, uri, network,
+            client, _loggerFactory.CreateLogger(nameof(BareBitcoinLightningClient)), _invoiceService, maxPollConcurrency, listenerHub: _listenerHub);
     }
 }

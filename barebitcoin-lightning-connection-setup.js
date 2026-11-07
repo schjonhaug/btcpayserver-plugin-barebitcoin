@@ -10,17 +10,47 @@ function askQuestion(query) {
     input: process.stdin,
     output: process.stdout,
   });
-  return new Promise((resolve) =>
-    rl.question(query, (ans) => {
-      rl.close();
-      resolve(ans.trim());
-    })
+  return new Promise((resolve, reject) =>
+    {
+      let answered = false;
+      rl.once("close", () => { if (!answered) reject(new Error("Input closed before an answer was supplied")); });
+      rl.once("SIGINT", () => rl.close());
+      rl.question(query, (ans) => {
+        answered = true;
+        resolve(ans.trim());
+        rl.close();
+      });
+    }
   );
 }
 
 function getAccountName(account) {
   const name = account.name || account.displayName || account.label;
   return typeof name === "string" && name.trim() ? name.trim() : null;
+}
+
+function requestAccounts(options, request = https.request, timeoutMs = 15000) {
+  return new Promise((resolve, reject) => {
+    let timer;
+    const req = request(options, (res) => {
+      let data = "";
+      res.setEncoding("utf8");
+      res.on("data", chunk => {
+        data += chunk;
+        if (data.length > 1024 * 1024) req.destroy(new Error("Account response is too large"));
+      });
+      res.once("error", reject);
+      res.once("aborted", () => reject(new Error("Account response was interrupted")));
+      res.once("end", () => resolve({ statusCode: res.statusCode, body: data }));
+    });
+    timer = setTimeout(() => req.destroy(new Error("Account request timed out")), timeoutMs);
+    req.once("error", reject);
+    req.once("close", () => {
+      clearTimeout(timer);
+      reject(new Error("Account request closed before a complete response"));
+    });
+    req.end();
+  });
 }
 
 async function main() {
@@ -50,20 +80,7 @@ async function main() {
   };
 
   // Make HTTPS GET request
-  const responseData = await new Promise((resolve, reject) => {
-    const req = https.request(options, (res) => {
-      let data = "";
-      res.setEncoding("utf8");
-      res.on("data", (chunk) => {
-        data += chunk;
-      });
-      res.on("end", () => {
-        resolve({ statusCode: res.statusCode, body: data });
-      });
-    });
-    req.on("error", (e) => reject(e));
-    req.end();
-  });
+  const responseData = await requestAccounts(options);
 
   // Check status code and parse body
   if (responseData.statusCode !== 200) {
@@ -113,7 +130,7 @@ async function main() {
     const answer = await askQuestion(
       `\nSelect account number (1-${accounts.length}): `
     );
-    const accountNum = parseInt(answer, 10);
+    const accountNum = /^\d+$/.test(answer) ? Number(answer) : NaN;
     if (
       isNaN(accountNum) ||
       accountNum < 1 ||
@@ -125,6 +142,9 @@ async function main() {
     selectedAccountId = accounts[accountNum - 1].id;
   }
 
+  if (typeof selectedAccountId !== "string" || !selectedAccountId.trim() || selectedAccountId.includes(";"))
+    throw new Error("The provider returned an invalid account ID");
+
   // Output final configuration
   console.log("\nConnection configuration for your custom Lightning node:\n");
   console.log(
@@ -132,7 +152,8 @@ async function main() {
   );
 }
 
-main().catch((err) => {
+module.exports = { requestAccounts, askQuestion };
+if (require.main === module) main().catch((err) => {
   console.error("An unexpected error occurred:", err);
   process.exit(1);
 });

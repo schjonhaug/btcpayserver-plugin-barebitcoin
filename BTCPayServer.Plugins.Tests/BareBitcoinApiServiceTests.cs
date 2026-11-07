@@ -12,7 +12,7 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinApiServiceTests
+public partial class BareBitcoinApiServiceTests
 {
     [Fact]
     public async Task MakeAuthenticatedRequest_AddsRequestIndependentTraceHeader()

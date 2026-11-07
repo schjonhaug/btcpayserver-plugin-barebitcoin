@@ -13,7 +13,7 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinListenerTests : IDisposable
+public partial class BareBitcoinListenerTests : IDisposable
 {
     private static readonly BareBitcoinInvoiceScope Scope = new("scope-a");
     private static readonly BareBitcoinInvoiceScope OtherScope = new("scope-b");
@@ -924,7 +924,7 @@ public class BareBitcoinListenerTests : IDisposable
     }
 
     [Fact]
-    public async Task RateLimited429_DoesNotCountAsFailure()
+    public async Task RateLimited429_BackoffRecoversAfterSuccess()
     {
         await using var invoiceService = new BareBitcoinInvoiceService(NullLogger.Instance, InvoiceFilePath);
         await invoiceService.TrackInvoice(Scope, "inv-1");
@@ -956,6 +956,7 @@ public class BareBitcoinListenerTests : IDisposable
         await completedCycles.Task.WaitAsync(TimeSpan.FromSeconds(30));
 
         // 429s should not trigger adaptive backoff — poll delay stays at base
+        await Task.Delay(100, TestContext.Current.CancellationToken);
         Assert.Equal(TimeSpan.FromSeconds(2), listener.CurrentPollDelay);
     }
 
@@ -1201,6 +1202,9 @@ public class BareBitcoinListenerTests : IDisposable
 
     private sealed class BeforeUntrackInvoiceService(IBareBitcoinInvoiceService inner, Func<Task> beforeUntrack) : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.CanAccessInvoice(scope, invoiceId, cancellation);
+
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => inner.TrackInvoice(scope, invoiceId, cancellation);
 
@@ -1223,6 +1227,9 @@ public class BareBitcoinListenerTests : IDisposable
     /// </summary>
     private sealed class FaultyUntrackInvoiceService(IBareBitcoinInvoiceService inner, string faultyInvoiceId) : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.CanAccessInvoice(scope, invoiceId, cancellation);
+
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => inner.TrackInvoice(scope, invoiceId, cancellation);
 
@@ -1242,6 +1249,9 @@ public class BareBitcoinListenerTests : IDisposable
 
     private sealed class AlwaysFaultyUntrackService(IBareBitcoinInvoiceService inner) : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => inner.CanAccessInvoice(scope, invoiceId, cancellation);
+
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => inner.TrackInvoice(scope, invoiceId, cancellation);
 

@@ -20,9 +20,10 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 /// </summary>
 public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDisposable
 {
-    private const int CurrentSchemaVersion = 3;
+    private const int CurrentSchemaVersion = 4;
     private readonly Dictionary<string, HashSet<string>> _trackedInvoiceRegistry = new(StringComparer.Ordinal);
     private readonly Dictionary<string, string> _invoiceOwners = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _retiredInvoices = new(StringComparer.Ordinal);
     private readonly HashSet<string> _unassignedLegacyInvoices = new(StringComparer.Ordinal);
     private readonly SemaphoreSlim _invoiceTrackingLock = new SemaphoreSlim(1, 1);
     private readonly SemaphoreSlim _diskWriteLock = new SemaphoreSlim(1, 1);
@@ -36,7 +37,11 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     private volatile int _consecutiveFlushFailures;
     private string? _diskPersistenceDisabledReason;
     private bool _dirty;
-    private bool _disposed;
+    private volatile bool _disposed;
+    private volatile bool _closed;
+    private readonly object _disposeLock = new();
+    private Task? _disposeTask;
+    public string? PersistenceDisabledReason => _diskPersistenceDisabledReason;
     private Exception? _lastFlushException;
 
     /// <summary>
@@ -61,6 +66,22 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         LoadFromDisk();
     }
 
+    public async Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+    {
+        await _invoiceTrackingLock.WaitAsync(cancellation);
+        try { return !_invoiceOwners.TryGetValue(invoiceId, out var owner) || owner == scope.Value; }
+        finally { _invoiceTrackingLock.Release(); }
+    }
+
+    /// <summary>Recovery inventory; retained terminal ownership is deliberately not automatically deleted.</summary>
+    public async Task<(int Active, int Quarantined, int Retired, string? PersistenceError)> GetHealth(CancellationToken cancellation = default)
+    {
+        await _invoiceTrackingLock.WaitAsync(cancellation);
+        try { return (_trackedInvoiceRegistry.Values.Sum(ids => ids.Count), _unassignedLegacyInvoices.Count,
+            _retiredInvoices.Count, _diskPersistenceDisabledReason ?? LastFlushException?.Message); }
+        finally { _invoiceTrackingLock.Release(); }
+    }
+
     /// <summary>
     /// Adds an invoice to the central tracking registry.
     /// The change is persisted to disk asynchronously via a flush timer.
@@ -70,6 +91,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_invoiceOwners.TryGetValue(invoiceId, out var owningScope) &&
                 !StringComparer.Ordinal.Equals(owningScope, scope.Value))
             {
@@ -77,6 +99,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 return;
             }
 
+            if (_retiredInvoices.Contains(invoiceId)) return;
             if (!_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices))
             {
                 invoices = new HashSet<string>(StringComparer.Ordinal);
@@ -108,9 +131,10 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (_trackedInvoiceRegistry.TryGetValue(scope.Value, out var invoices) && invoices.Remove(invoiceId))
             {
-                _invoiceOwners.Remove(invoiceId);
+                _retiredInvoices.Add(invoiceId);
                 if (invoices.Count == 0)
                     _trackedInvoiceRegistry.Remove(scope.Value);
 
@@ -135,6 +159,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         await _invoiceTrackingLock.WaitAsync(cancellation);
         try
         {
+            ObjectDisposedException.ThrowIf(_disposed, this);
             if (!_unassignedLegacyInvoices.Contains(invoiceId))
                 return false;
 
@@ -187,6 +212,16 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
     /// </summary>
     public async Task FlushAsync()
     {
+        await _diskWriteLock.WaitAsync().ConfigureAwait(false);
+        try
+        {
+            if (!_closed) await FlushCoreAsync().ConfigureAwait(false);
+        }
+        finally { _diskWriteLock.Release(); }
+    }
+
+    private async Task FlushCoreAsync()
+    {
         if (_diskPersistenceDisabledReason is not null)
             return;
 
@@ -217,7 +252,6 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 SafeRelease(_invoiceTrackingLock);
             }
 
-            if (!await TryAcquireAsync(_diskWriteLock)) return;
             try
             {
                 if (version <= _writtenVersion) return;
@@ -233,10 +267,6 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 _logThrottle.LogError(ex, "Failed to flush tracked invoices to disk");
                 await MarkDirtyAndRescheduleAsync();
             }
-            finally
-            {
-                SafeRelease(_diskWriteLock);
-            }
         }
         catch (Exception ex)
         {
@@ -244,10 +274,17 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
     }
 
-    public async ValueTask DisposeAsync()
+    public ValueTask DisposeAsync()
     {
-        if (_disposed) return;
-        _disposed = true;
+        lock (_disposeLock)
+            return new ValueTask(_disposeTask ??= DisposeCoreAsync());
+    }
+
+    private async Task DisposeCoreAsync()
+    {
+        await _invoiceTrackingLock.WaitAsync().ConfigureAwait(false);
+        try { _disposed = true; }
+        finally { _invoiceTrackingLock.Release(); }
 
         await _flushTimer.DisposeAsync();
         await FlushAsync();
@@ -266,8 +303,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 "Final flush failed during dispose — tracked invoice state may be lost on restart");
         }
 
-        _invoiceTrackingLock.Dispose();
-        _diskWriteLock.Dispose();
+        // Leave managed semaphores usable for already queued timer callbacks.
+        // All writes are joined above; late callbacks observe Closed and do nothing.
+        _closed = true;
     }
 
     private static async Task<bool> TryAcquireAsync(SemaphoreSlim semaphore)
@@ -386,7 +424,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 return;
             }
 
-            if (persisted is null || persisted.Version != CurrentSchemaVersion || persisted.Scopes is null)
+            if (persisted is null || persisted.Version is not (3 or CurrentSchemaVersion) || persisted.Scopes is null)
             {
                 _diskPersistenceDisabledReason =
                     $"Unsupported tracked invoice registry schema version {persisted?.Version.ToString() ?? "unknown"}";
@@ -408,11 +446,21 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                     if (_invoiceOwners.TryAdd(invoiceId, scope))
                         validInvoiceIds.Add(invoiceId);
                     else if (!StringComparer.Ordinal.Equals(_invoiceOwners[invoiceId], scope))
-                        _dirty = true;
+                        throw new JsonSerializationException("Conflicting persisted invoice ownership; restore authoritative ownership before restarting");
                 }
 
                 if (validInvoiceIds.Count > 0)
                     _trackedInvoiceRegistry[scope] = validInvoiceIds;
+            }
+
+            foreach (var (invoiceId, owner) in persisted.RetiredOwners ?? new Dictionary<string, string>())
+            {
+                if (string.IsNullOrWhiteSpace(invoiceId) || string.IsNullOrWhiteSpace(owner)) continue;
+                if (_invoiceOwners.TryGetValue(invoiceId, out var activeOwner) && activeOwner != owner)
+                    throw new JsonSerializationException("Conflicting active and terminal invoice ownership");
+                _invoiceOwners[invoiceId] = owner;
+                _retiredInvoices.Add(invoiceId);
+                if (_trackedInvoiceRegistry.TryGetValue(owner, out var active)) active.Remove(invoiceId);
             }
 
             var assignedInvoiceIds = _trackedInvoiceRegistry.Values
@@ -420,7 +468,7 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
                 .ToHashSet(StringComparer.Ordinal);
             foreach (var invoiceId in persisted.UnassignedLegacyInvoices ?? Array.Empty<string>())
             {
-                if (!string.IsNullOrWhiteSpace(invoiceId) && !assignedInvoiceIds.Contains(invoiceId))
+                if (!string.IsNullOrWhiteSpace(invoiceId) && !_invoiceOwners.ContainsKey(invoiceId))
                     _unassignedLegacyInvoices.Add(invoiceId);
             }
 
@@ -436,12 +484,24 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         }
         catch (JsonException ex)
         {
-            _logger.LogWarning(ex, "Failed to parse tracked invoices file at {Path}, starting with empty registry", _dataFilePath);
+            DisablePersistence(ex, "Registry JSON could not be parsed");
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            _logger.LogWarning(ex, "Failed to read tracked invoices file at {Path}, starting with empty registry", _dataFilePath);
+            DisablePersistence(ex, "Registry could not be read");
         }
+    }
+
+    private void DisablePersistence(Exception exception, string reason)
+    {
+        _trackedInvoiceRegistry.Clear();
+        _invoiceOwners.Clear();
+        _retiredInvoices.Clear();
+        _unassignedLegacyInvoices.Clear();
+        _dirty = false;
+        _diskPersistenceDisabledReason = reason;
+        Volatile.Write(ref _lastFlushException, exception);
+        _logger.LogError(exception, "{Reason} at {Path}. Persistence is disabled to preserve recovery data; repair the file and restart", reason, _dataFilePath);
     }
 
     // FlushAsync invokes this while holding _invoiceTrackingLock, so every
@@ -458,6 +518,8 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
         {
             Version = CurrentSchemaVersion,
             Scopes = scopes,
+            RetiredOwners = _retiredInvoices.OrderBy(id => id, StringComparer.Ordinal)
+                .ToDictionary(id => id, id => _invoiceOwners[id], StringComparer.Ordinal),
             UnassignedLegacyInvoices = _unassignedLegacyInvoices
                 .OrderBy(id => id, StringComparer.Ordinal)
                 .ToArray()
@@ -476,6 +538,9 @@ public class BareBitcoinInvoiceService : IBareBitcoinInvoiceService, IAsyncDispo
 
         [JsonProperty("scopes")]
         public Dictionary<string, string[]>? Scopes { get; init; }
+
+        [JsonProperty("retiredOwners")]
+        public Dictionary<string, string>? RetiredOwners { get; init; }
 
         [JsonProperty("unassignedLegacyInvoices")]
         public string[]? UnassignedLegacyInvoices { get; init; }

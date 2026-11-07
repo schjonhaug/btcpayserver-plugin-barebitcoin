@@ -13,7 +13,8 @@
     document.addEventListener("DOMContentLoaded", function () {
         const customNodeAccordian = document.getElementById("CustomNodeSupport");
         const template = document.getElementById("barebitcoin");
-        customNodeAccordian.appendChild(template.content.cloneNode(true));
+        if (!template) return;
+        customNodeAccordian?.appendChild(template.content.cloneNode(true));
 
         const connectionString = document.getElementById("ConnectionString");
         const form = connectionString?.closest("form");
@@ -68,6 +69,7 @@
                     <li>Run the provided setup script to select your Bitcoin account and generate the connection string</li>
                     <li>BTCPay automatically binds the connection string to this store when you test or save it</li>
                 </ol>
+                <p class="my-2">Connection testing verifies read access and account availability. Receive permission and the secret are verified only when creating an invoice.</p>
                 <p class="my-2">For detailed setup instructions, please refer to our <a href="https://github.com/schjonhaug/btcpayserver-plugin-barebitcoin" target="_blank" rel="noreferrer noopener">documentation</a>.</p>
             </div>
         </div>

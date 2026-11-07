@@ -21,12 +21,12 @@
         <ProjectReference Include="..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj"
                           Condition="Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <Private>false</Private>
+            <Private>true</Private>
         </ProjectReference>
         <ProjectReference Include="..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj"
                           Condition="!Exists('..\..\btcpayserver\BTCPayServer\BTCPayServer.csproj') and Exists('..\submodules\btcpayserver\BTCPayServer\BTCPayServer.csproj')">
             <Properties>StaticWebAssetsEnabled=false</Properties>
-            <Private>false</Private>
+            <Private>true</Private>
         </ProjectReference>
     </ItemGroup>
 

@@ -36,6 +36,30 @@ The persisted connection string requires a server-authenticated store binding. T
 
 If the plugin encounters a registry schema newer than it understands, it leaves the file unchanged and disables tracking mutations instead of overwriting future-version state. Installing a compatible plugin version or an explicit migration is then required before persistence resumes.
 
+## Monitoring and recovery guarantees
+
+- Amountless/top-up payments use the provider's validated `amountReceivedMillisatoshi` settlement. A paid invoice with no usable received amount stays monitored without recording zero.
+- Connection **Test** checks read access and the selected account, and configuration validates the secret's Base64 syntax. It does not prove the secret is correct or that Receive permission is granted. Check those permissions in Bare Bitcoin before accepting payments.
+- Cancellation reaches HTTP requests and queued signing operations. An interrupted POST can still have committed remotely. Such failures report an **unknown creation outcome** with a trace ID; inspect the Bare Bitcoin account before retrying. The plugin does not automatically retry invoice creation or claim provider idempotency.
+- Payment notifications are at-least-once. A payment is offered to every live listener in its scope before untracking; the shared hub retains bounded recent history for late listeners. BTCPay's monitored invoice records and payment-hash identity provide reconciliation after restart or recording failure; queue consumption is not a database acknowledgement. Keep the original account credentials available until all invoices have settled or expired.
+- Missing or unknown provider status and malformed successful responses preserve tracking and log an observation failure. They are not treated as expired. A 404 remains the provider's not-found result; eventual visibility after creation is not specified by the bundled contract.
+- The registry now writes **schema 4**, reads schema 3, and migrates older registries as before. Terminal invoice ownership is retained in `retiredOwners` to prevent stale responses and foreign connections from reactivating completed tracking. Do not downgrade across this change without reviewing registry compatibility; older plugins preserve unknown schemas but cannot persist new tracking.
+- Corrupt, unreadable, conflicting-owner, and unsupported-schema registries are preserved without overwriting them. New invoices can be tracked in memory while persistence is disabled. Startup logs identify the problem; `BareBitcoinInvoiceService.GetHealth()` exposes active, quarantined, retired counts and persistence error for diagnostics.
+
+To recover persistence, stop BTCPay, back up `Plugins/BareBitcoin/tracked-invoices.json`, and restore or repair it using BTCPay's monitored invoice/store records as the authority. Preserve `retiredOwners` and unassigned legacy IDs; never assign a conflicting ID based only on file order. Restart and confirm the load log and health before accepting new payments. Quarantined legacy IDs and abandoned scopes are retained deliberately until ownership can be established. There is no safe automatic TTL for potentially paid invoices. Retained ownership grows with invoice history; archive/reset it only during an explicitly reconciled maintenance operation, not while callers can replay old IDs.
+
+Run one plugin process per registry file and avoid sharing a signing API key across independent processes. The registry and nonce ordering are coordinated in-process; the provider contract does not establish distributed nonce recovery or a safe automatic ownership transfer. Recover data-protection keys with the host database, or re-save each store connection to mint a new binding.
+
+Development regression checks, in addition to the .NET suite:
+
+```shell
+node --test tests/*.test.cjs
+dotnet build ConfigBuilder/ConfigBuilder.csproj
+python3 tests/tooling-regression.py
+```
+
+The tooling tests use disposable temporary-directory fixtures and mock Git pushes; they do not publish releases or comments. ConfigBuilder merges `DEBUG_PLUGINS` into existing settings using atomic replacement and rejects invalid existing JSON.
+
 ## Installation
 
 1. In BTCPay Server, go to **Server Settings > Plugins**
@@ -207,9 +231,17 @@ Prepare a reproducible release tag with:
 ./pluginpacker.sh 2.0.1
 ```
 
-The script updates the plugin version, runs tests, optionally creates a local `.btcpay` package, commits the version bump, creates the release tag, pushes master and the tag, and prints the Plugin Builder form values. Packaging runs before the commit, so a packaging failure leaves git untouched and the run can simply be repeated.
+The script updates the plugin version, runs tests, optionally creates a local `.btcpay` package, commits the version bump, creates the release tag, pushes master and the tag atomically, and prints the Plugin Builder form values. Packaging runs before the commit, so a packaging failure leaves git untouched and the run can simply be repeated.
 
 The local package needs BTCPay Server sources. The tracked `submodules/btcpayserver` submodule and an adjacent `../btcpayserver` checkout are both found automatically; set `BTCPAYSERVER_DIR` for a checkout kept anywhere else, or pass `--no-package` to skip it. Plugin Builder builds the package from the tag either way.
+
+If publication fails after the local release commit and tag were created, inspect the refs and resume without rebuilding:
+
+```shell
+./pluginpacker.sh 2.0.1 --resume
+```
+
+Resume requires a clean master checkout at the matching release commit/tag and never moves an existing tag. A tag-creation failure retains the commit and prints recovery instructions. Atomic push requires server support; failure does not silently fall back to separate pushes.
 
 Create a new Plugin Builder build with:
 

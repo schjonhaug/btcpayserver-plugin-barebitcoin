@@ -120,20 +120,21 @@ public class BareBitcoinApiService
     /// 
     /// In both cases, the API key (x-bb-api-key) and trace headers are included.
     /// </remarks>
-    public async Task<string> MakeAuthenticatedRequest(string method, string path, string? data = null, bool useSimpleAuth = false)
+    public async Task<string> MakeAuthenticatedRequest(string method, string path, string? data = null, bool useSimpleAuth = false, CancellationToken cancellation = default)
     {
+        cancellation.ThrowIfCancellationRequested();
         if (useSimpleAuth)
         {
             _logger.LogInformation("Making simple authenticated {method} request to {path} using API key only", method, path);
             
-            return await MakeRequest(method, path, data);
+            return await MakeRequest(method, path, data, cancellation: cancellation);
         }
         
         var authState = RetainAuthState();
         var requestLockAcquired = false;
         try
         {
-            await authState.RequestLock.WaitAsync();
+            await authState.RequestLock.WaitAsync(cancellation);
             requestLockAcquired = true;
 
             var nonce = GetNextNonce(authState);
@@ -146,7 +147,7 @@ public class BareBitcoinApiService
             };
 
             _logger.LogInformation("Making {method} request to {path} with nonce {nonce}", method, path, nonce);
-            return await MakeRequest(method, path, data, additionalHeaders);
+            return await MakeRequest(method, path, data, additionalHeaders, cancellation);
         }
         finally
         {
@@ -261,12 +262,15 @@ public class BareBitcoinApiService
     /// - Executes the request and processes the response
     /// - Handles error logging and status code checking
     /// </remarks>
-    private async Task<string> MakeRequest(string method, string path, string? data = null, Dictionary<string, string>? additionalHeaders = null)
+    private async Task<string> MakeRequest(string method, string path, string? data = null, Dictionary<string, string>? additionalHeaders = null, CancellationToken cancellation = default)
     {
-        try 
+        var trace = CreateTraceHeader();
+        var traceId = trace[(trace.LastIndexOf('+') + 1)..];
+        var sending = false;
+        try
         {
             var requestUrl = $"https://api.bb.no{path}";
-            var request = new HttpRequestMessage(new HttpMethod(method), requestUrl);
+            using var request = new HttpRequestMessage(new HttpMethod(method), requestUrl);
             
             // Add API key header
             request.Headers.Add("x-bb-api-key", _publicKey);
@@ -280,7 +284,7 @@ public class BareBitcoinApiService
                 }
             }
 
-            request.Headers.Add("x-bb-trace", CreateTraceHeader());
+            request.Headers.Add("x-bb-trace", trace);
 
             // Header values carry the API key and signature, so only the names are logged
             if (_logger.IsEnabled(LogLevel.Debug))
@@ -292,8 +296,10 @@ public class BareBitcoinApiService
                 request.Content = new StringContent(data, System.Text.Encoding.UTF8, "application/json");
             }
 
-            var response = await _httpClient.SendAsync(request);
-            var responseContent = await response.Content.ReadAsStringAsync();
+            cancellation.ThrowIfCancellationRequested();
+            sending = true;
+            using var response = await _httpClient.SendAsync(request, cancellation).ConfigureAwait(false);
+            var responseContent = await response.Content.ReadAsStringAsync(cancellation).ConfigureAwait(false);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -317,6 +323,18 @@ public class BareBitcoinApiService
             }
             
             return responseContent;
+        }
+        catch (OperationCanceledException ex) when (sending && method == "POST")
+        {
+            var message = $"Bare Bitcoin creation outcome is unknown after cancellation (trace {traceId}). Reconcile the account before retrying; cancellation does not prove that no invoice was created.";
+            _logger.LogWarning(ex, "{Message}", message);
+            throw new OperationCanceledException(message, ex, cancellation);
+        }
+        catch (HttpRequestException ex) when (sending && method == "POST" && (ex.StatusCode is null || (int)ex.StatusCode >= 500))
+        {
+            var message = $"Bare Bitcoin creation outcome is unknown (trace {traceId}). Reconcile the account before retrying.";
+            _logger.LogWarning(ex, "{Message}", message);
+            throw new HttpRequestException(message, ex, ex.StatusCode);
         }
         catch (HttpRequestException ex)
         {

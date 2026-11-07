@@ -3,6 +3,8 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Globalization;
+using System.ComponentModel.DataAnnotations;
+using BTCPayServer.Payments.Lightning;
 using System.IO;
 using System.Linq;
 using System.Net;
@@ -20,11 +22,11 @@ using Network = NBitcoin.Network;
 
 namespace BTCPayServer.Plugins.BareBitcoin;
 
-public class BareBitcoinLightningClient : ILightningClient
+public class BareBitcoinLightningClient : IExtendedLightningClient
 {
     private readonly string _privateKey;
     private readonly string _publicKey;
-    private readonly string _accountId; 
+    private readonly string _accountId;
     private readonly string _storeId;
     private readonly Uri _apiEndpoint;
     private readonly HttpClient _httpClient;
@@ -77,7 +79,24 @@ public class BareBitcoinLightningClient : ILightningClient
 
         _persistenceWarningThrottle = new LogThrottle(logger, TimeSpan.FromMinutes(5));
         _apiService = new BareBitcoinApiService(_privateKey, _publicKey, _httpClient, logger, tracePrefix: _accountId);
-        _balanceService = new BareBitcoinBalanceService(_apiService, logger);
+        _balanceService = new BareBitcoinBalanceService(_apiService, logger, _timeProvider);
+    }
+
+    public string DisplayName => "Bare Bitcoin (receive only)";
+    public Uri ServerUri => _apiEndpoint;
+
+    public async Task<ValidationResult?> Validate()
+    {
+        using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        try
+        {
+            await GetBalance(deadline.Token).ConfigureAwait(false);
+            return ValidationResult.Success;
+        }
+        catch (Exception ex)
+        {
+            return new ValidationResult("Bare Bitcoin account validation failed: " + ex.Message);
+        }
     }
 
     public override string ToString()
@@ -90,33 +109,33 @@ public class BareBitcoinLightningClient : ILightningClient
     {
         Logger.LogInformation("GetInvoice(invoiceId: {invoiceId})", invoiceId);
 
+        cancellation.ThrowIfCancellationRequested();
         const int baseDelayMs = 200;
         var maxDelay = TimeSpan.FromSeconds(30);
         var maxRateLimitDelay = TimeSpan.FromSeconds(60);
 
-        if (_rateLimitBackoff.TryGetValue(invoiceId, out var notBefore))
-        {
-            if (DateTimeOffset.UtcNow < notBefore)
-            {
-                var remaining = notBefore - DateTimeOffset.UtcNow;
-                Logger.LogDebug(
-                    "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
-                    invoiceId, notBefore);
-                throw new RateLimitedException(
-                    $"Invoice {invoiceId} is rate-limit deferred for {(int)remaining.TotalSeconds}s",
-                    remaining);
-            }
-
-            // Backoff expired — remove stale entry and proceed with fetch
-            _rateLimitBackoff.TryRemove(invoiceId, out _);
-        }
-
         for (var attempt = 0; ; attempt++)
         {
+            if (_rateLimitBackoff.TryGetValue(invoiceId, out var notBefore))
+            {
+                if (_timeProvider.GetUtcNow() < notBefore)
+                {
+                    var remaining = notBefore - _timeProvider.GetUtcNow();
+                    Logger.LogDebug(
+                        "Invoice {InvoiceId} is rate-limit deferred until {NotBefore}, skipping",
+                        invoiceId, notBefore);
+                    throw new RateLimitedException(
+                        $"Invoice {invoiceId} is rate-limit deferred for {(int)remaining.TotalSeconds}s",
+                        remaining);
+                }
+
+                // Backoff expired — remove stale entry and proceed with fetch
+                ((ICollection<KeyValuePair<string, DateTimeOffset>>)_rateLimitBackoff).Remove(new(invoiceId, notBefore));
+            }
+
             try
             {
                 var result = await FetchInvoice(invoiceId, cancellation);
-                _rateLimitBackoff.TryRemove(invoiceId, out _);
                 return result;
             }
             catch (HttpRequestException ex) when (
@@ -124,38 +143,25 @@ public class BareBitcoinLightningClient : ILightningClient
             {
                 throw;
             }
-            catch (HttpRequestException ex) when (
-                attempt < _maxRetries && IsTransientHttpError(ex))
+            catch (HttpRequestException ex) when (IsTransientHttpError(ex))
             {
-                if (ex is RateLimitedException rle && rle.RetryAfter is { } ra && ra > TimeSpan.Zero)
+                if (ex is RateLimitedException { RetryAfter: { } retryAfter } && retryAfter > TimeSpan.Zero)
                 {
-                    if (ra > maxRateLimitDelay)
-                    {
-                        var maxBackoff = TimeSpan.FromHours(1);
-                        var clamped = ra > maxBackoff ? maxBackoff : ra;
-                        _rateLimitBackoff[invoiceId] = DateTimeOffset.UtcNow + clamped;
-                        Logger.LogWarning(
-                            "Invoice {InvoiceId} rate-limited with Retry-After {RetryAfter}s exceeding {Cap}s cap, deferring for {Deferred}s",
-                            invoiceId, (int)ra.TotalSeconds, (int)maxRateLimitDelay.TotalSeconds, (int)clamped.TotalSeconds);
-                        throw new RateLimitedException(
-                            $"Invoice {invoiceId} rate-limited, deferring for {(int)clamped.TotalSeconds}s",
-                            clamped);
-                    }
-
-                    Logger.LogWarning(ex,
-                        "Invoice {InvoiceId} rate-limited (attempt {Attempt}/{MaxRetries}), honoring Retry-After of {Delay}ms",
-                        invoiceId, attempt + 1, _maxRetries, (int)ra.TotalMilliseconds);
-                    await Task.Delay(ra, cancellation);
+                    var deferredUntil = _timeProvider.GetUtcNow() + retryAfter;
+                    _rateLimitBackoff.AddOrUpdate(invoiceId, deferredUntil,
+                        (_, existing) => existing > deferredUntil ? existing : deferredUntil);
+                    if (attempt >= _maxRetries || retryAfter > maxRateLimitDelay)
+                        throw;
+                    await Task.Delay(retryAfter, _timeProvider, cancellation);
+                    ((ICollection<KeyValuePair<string, DateTimeOffset>>)_rateLimitBackoff)
+                        .Remove(new(invoiceId, deferredUntil));
                 }
                 else
                 {
+                    if (attempt >= _maxRetries) throw;
                     var backoff = TimeSpan.FromMilliseconds(baseDelayMs * Math.Pow(2, attempt));
                     if (backoff > maxDelay) backoff = maxDelay;
-
-                    Logger.LogWarning(ex,
-                        "Transient error fetching invoice {InvoiceId} (attempt {Attempt}/{MaxRetries}), retrying in {Delay}ms",
-                        invoiceId, attempt + 1, _maxRetries, (int)backoff.TotalMilliseconds);
-                    await Task.Delay(backoff, cancellation);
+                    await Task.Delay(backoff, _timeProvider, cancellation);
                 }
             }
         }
@@ -163,10 +169,12 @@ public class BareBitcoinLightningClient : ILightningClient
 
     private async Task<LightningInvoice?> FetchInvoice(string invoiceId, CancellationToken cancellation)
     {
+        if (!await _invoiceService.CanAccessInvoice(_invoiceScope, invoiceId, cancellation))
+            throw new UnauthorizedAccessException("This invoice belongs to another store connection");
         string response;
         try
         {
-            response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}", useSimpleAuth: true);
+            response = await _apiService.MakeAuthenticatedRequest("GET", $"/v1/deposit-destinations/bitcoin/invoice/{invoiceId}", useSimpleAuth: true, cancellation: cancellation);
         }
         catch (HttpRequestException ex) when (ex.StatusCode == HttpStatusCode.NotFound)
         {
@@ -178,8 +186,7 @@ public class BareBitcoinLightningClient : ILightningClient
         var invoice = responseObj["invoice"]?.Value<string>();
         if (string.IsNullOrEmpty(invoice))
         {
-            Logger.LogWarning("Invoice {InvoiceId} not found or empty response", invoiceId);
-            return null;
+            throw new InvalidOperationException("Bare Bitcoin returned an invalid invoice response (missing invoice); tracking is retained");
         }
 
         var status = responseObj["status"]?.Value<string>() switch
@@ -188,7 +195,8 @@ public class BareBitcoinLightningClient : ILightningClient
             "INVOICE_STATUS_PAID" => LightningInvoiceStatus.Paid,
             "INVOICE_STATUS_EXPIRED" => LightningInvoiceStatus.Expired,
             "INVOICE_STATUS_CANCELED" => LightningInvoiceStatus.Expired,
-            _ => LightningInvoiceStatus.Unpaid // Default case
+            "INVOICE_STATUS_PENDING" => LightningInvoiceStatus.Unpaid,
+            _ => throw new InvalidOperationException("Bare Bitcoin returned an unknown invoice status; tracking is retained")
         };
 
         var bolt11 = ParseProviderInvoice(invoice);
@@ -268,6 +276,9 @@ public class BareBitcoinLightningClient : ILightningClient
                 _persistenceWarningThrottle.LogWarning(ex, "Failed to persist terminal tracking cleanup for invoice {InvoiceId}, will retry on next poll cycle", invoiceId);
             }
         }
+
+        if (!await _invoiceService.CanAccessInvoice(_invoiceScope, invoiceId, cancellation))
+            throw new UnauthorizedAccessException("This invoice belongs to another store connection");
 
         Logger.LogDebug("Returning invoice {InvoiceId} with status {Status}, AmountReceived: {AmountReceived}, PaymentHash: {PaymentHash}, HasPreimage: {HasPreimage}",
             result.Id, result.Status, result.AmountReceived, result.PaymentHash, result.Preimage is not null);
@@ -381,40 +392,6 @@ public class BareBitcoinLightningClient : ILightningClient
         throw new NotImplementedException();
     }
 
-    public LightningPayment? ToLightningPayment(JObject transaction)
-    {
-        if ((transaction["direction"]?.Value<string>() ?? "") == "RECEIVE")
-            return null;
-
-        var initiationVia = transaction["initiationVia"];
-        if (initiationVia?["paymentHash"] == null || initiationVia["paymentRequest"] == null)
-            return null;
-
-        var paymentRequest = initiationVia["paymentRequest"]!.Value<string>();
-        if (paymentRequest == null)
-            return null;
-            
-        var bolt11 = BOLT11PaymentRequest.Parse(paymentRequest, _network);
-        var preimage = transaction["settlementVia"]?["preImage"]?.Value<string>();
-        return new LightningPayment()
-        {
-            Amount = bolt11.MinimumAmount,
-            Status = (transaction["status"]?.Value<string>() ?? "") switch
-            {
-                "FAILURE" => LightningPaymentStatus.Failed,
-                "PENDING" => LightningPaymentStatus.Pending,
-                "SUCCESS" => LightningPaymentStatus.Complete,
-                _ => LightningPaymentStatus.Unknown
-            },
-            BOLT11 = paymentRequest,
-            Id = initiationVia["paymentHash"]!.Value<string>() ?? string.Empty,
-            PaymentHash = initiationVia["paymentHash"]!.Value<string>() ?? string.Empty,
-            CreatedAt = DateTimeOffset.FromUnixTimeSeconds(transaction["createdAt"]!.Value<long>()),
-            AmountSent = bolt11.MinimumAmount,
-            Preimage = preimage
-        };
-    }
-
     public async Task<LightningPayment[]> ListPayments(CancellationToken cancellation = new CancellationToken())
     {
         Logger.LogInformation("ListPayments()");
@@ -432,7 +409,7 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<LightningInvoice> CreateInvoice(LightMoney amount, string description, TimeSpan expiry,
         CancellationToken cancellation = new())
     {
-        Logger.LogInformation("CreateInvoice(amount: {amount}, description: {description}, expiry: {expiry})", 
+        Logger.LogInformation("CreateInvoice(amount: {amount}, description: {description}, expiry: {expiry})",
             amount, description, expiry);
         return await CreateInvoice(new CreateInvoiceParams(amount, description, expiry), cancellation);
     }
@@ -440,6 +417,7 @@ public class BareBitcoinLightningClient : ILightningClient
     public async Task<LightningInvoice> CreateInvoice(CreateInvoiceParams createInvoiceRequest,
         CancellationToken cancellation = new())
     {
+        cancellation.ThrowIfCancellationRequested();
         Logger.LogInformation("CreateInvoice(request: {request})", createInvoiceRequest);
         try
         {
@@ -462,11 +440,11 @@ public class BareBitcoinLightningClient : ILightningClient
             };
 
             var response = await _apiService.MakeAuthenticatedRequest(
-                "POST", 
+                "POST",
                 "/v1/deposit-destinations/bitcoin/invoice",
-                JsonConvert.SerializeObject(requestData)
+                JsonConvert.SerializeObject(requestData), cancellation: cancellation
             );
-            
+
             var responseObj = JObject.Parse(response);
             var invoice = responseObj["invoice"]?.Value<string>();
 
@@ -485,7 +463,7 @@ public class BareBitcoinLightningClient : ILightningClient
             // disk error must not prevent returning it to the caller.
             try
             {
-                await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, cancellation);
+                await _invoiceService.TrackInvoice(_invoiceScope, invoiceId, CancellationToken.None);
             }
             catch (IOException ex)
             {
@@ -661,7 +639,7 @@ public class BareBitcoinLightningClient : ILightningClient
         try
         {
             // If we have a current listener that's not disposed, return it
-            if (_currentListener is BareBitcoinListener listener && !listener.IsDisposed)
+            if (_currentListener is BareBitcoinListener listener && !listener.IsDisposed && !listener.PollingTask.IsCompleted)
             {
                 Logger.LogInformation("Returning existing listener");
                 return listener;
@@ -688,8 +666,8 @@ public class BareBitcoinLightningClient : ILightningClient
 
     public async Task<LightningNodeInformation> GetInfo(CancellationToken cancellation = new CancellationToken())
     {
-        Logger.LogInformation("GetInfo");
-        await Task.CompletedTask;
+        await GetBalance(cancellation).ConfigureAwait(false);
+        // Read/account validation succeeded; the custodial provider has no node address.
         throw new NotSupportedException();
     }
 
