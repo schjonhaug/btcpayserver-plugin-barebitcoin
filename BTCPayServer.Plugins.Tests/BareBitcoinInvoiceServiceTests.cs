@@ -12,7 +12,7 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinInvoiceServiceTests : IDisposable
+public partial class BareBitcoinInvoiceServiceTests : IDisposable
 {
     private static readonly BareBitcoinInvoiceScope Scope = new("scope-a");
     private static readonly BareBitcoinInvoiceScope OtherScope = new("scope-b");
@@ -143,7 +143,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         await service.FlushAsync();
         var persisted = File.ReadAllText(FilePath);
-        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"version\":4", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy-a\",\"legacy-b\"]", persisted);
 
         await using var reloaded = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
@@ -186,7 +186,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         await service.FlushAsync();
         var persisted = File.ReadAllText(FilePath);
-        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"version\":4", persisted);
         Assert.Contains("\"scopes\":{}", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"invoice-a\",\"invoice-b\",\"legacy\",\"shared\"]", persisted);
 
@@ -206,7 +206,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
         await service.FlushAsync();
 
         var persisted = File.ReadAllText(FilePath);
-        Assert.Contains("\"version\":3", persisted);
+        Assert.Contains("\"version\":4", persisted);
         Assert.Contains("\"scopes\":{}", persisted);
         Assert.Contains("\"unassignedLegacyInvoices\":[\"legacy\"]", persisted);
         Assert.True(await service.TryClaimLegacyInvoice(Scope, "legacy"));
@@ -251,19 +251,16 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
     }
 
     [Fact]
-    public async Task DuplicatePersistedOwnership_IsCanonicalizedToOneScope()
+    public async Task DuplicatePersistedOwnership_IsPreservedForExplicitRecovery()
     {
-        File.WriteAllText(FilePath,
-            "{\"version\":3,\"scopes\":{\"scope-b\":[\"duplicate\"],\"scope-a\":[\"duplicate\"]},\"unassignedLegacyInvoices\":[]}");
-
+        const string original = "{\"version\":3,\"scopes\":{\"scope-b\":[\"duplicate\"],\"scope-a\":[\"duplicate\"]},\"unassignedLegacyInvoices\":[]}";
+        File.WriteAllText(FilePath, original);
         await using var service = new BareBitcoinInvoiceService(NullLogger.Instance, FilePath);
-
-        Assert.Equal(["duplicate"], await service.GetTrackedInvoices(Scope));
-        Assert.Empty(await service.GetTrackedInvoices(OtherScope));
+        Assert.NotNull(service.PersistenceDisabledReason);
+        Assert.Empty(await service.GetTrackedInvoices(Scope));
+        await service.TrackInvoice(Scope, "new");
         await service.FlushAsync();
-        var persisted = File.ReadAllText(FilePath);
-        Assert.Contains("\"scope-a\":[\"duplicate\"]", persisted);
-        Assert.DoesNotContain("\"scope-b\"", persisted);
+        Assert.Equal(original, File.ReadAllText(FilePath));
     }
 
     [Fact]
@@ -497,6 +494,7 @@ public class BareBitcoinInvoiceServiceTests : IDisposable
 
         // Dispose while flush is blocked in I/O
         var disposeTask = service.DisposeAsync();
+        Assert.False(disposeTask.IsCompleted);
 
         // Release the blocked flush
         writer.Release();

@@ -50,6 +50,14 @@ jobs:
       - name: Run tests
         run: dotnet test --project BTCPayServer.Plugins.Tests/BTCPayServer.Plugins.Tests.csproj -c Release --no-build --minimum-expected-tests 1
 
+      - name: Check setup and review workflow state transitions
+        run: node --test tests/*.test.cjs
+
+      - name: Check configuration preservation and release resumption
+        run: |
+          dotnet build ConfigBuilder/ConfigBuilder.csproj
+          python3 tests/tooling-regression.py
+
   config-builder-container:
     runs-on: ubuntu-latest
 

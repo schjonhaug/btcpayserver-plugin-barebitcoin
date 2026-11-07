@@ -64,37 +64,43 @@ internal class LogThrottle
     {
         if (!_logger.IsEnabled(logLevel)) return;
 
-        var state = _states.GetOrAdd((logLevel, messageTemplate), _ => new ThrottleState
+        while (true)
         {
-            WindowStart = 0
-        });
-
-        lock (state.Lock)
-        {
-            var now = _clock();
-            var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
-
-            if (state.IsFirstCall || elapsed >= _suppressionWindow)
+            var state = _states.GetOrAdd((logLevel, messageTemplate), _ => new ThrottleState
             {
-                // Window expired (or first call) — emit summary if anything was suppressed
-                if (state.SuppressedCount > 0)
+                WindowStart = 0
+            });
+
+            lock (state.Lock)
+            {
+                if (!_states.TryGetValue((logLevel, messageTemplate), out var current) || !ReferenceEquals(current, state))
+                    continue;
+                var now = _clock();
+                var elapsed = Stopwatch.GetElapsedTime(state.WindowStart, now);
+
+                if (state.IsFirstCall || elapsed >= _suppressionWindow)
                 {
-                    _logger.Log(logLevel,
-                        "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
-                        state.SuppressedCount, messageTemplate, _suppressionWindow);
-                }
+                    // Window expired (or first call) — emit summary if anything was suppressed
+                    if (state.SuppressedCount > 0)
+                    {
+                        _logger.Log(logLevel,
+                            "Suppressed {SuppressedCount} repeated message(s) for \"{MessageTemplate}\" over the last {Window}",
+                            state.SuppressedCount, messageTemplate, _suppressionWindow);
+                    }
 
-                // Log the actual message and start a new window
-                _logger.Log(logLevel, ex, messageTemplate, args);
-                state.WindowStart = now;
-                state.IsFirstCall = false;
-                state.SuppressedCount = 0;
+                    // Log the actual message and start a new window
+                    _logger.Log(logLevel, ex, messageTemplate, args);
+                    state.WindowStart = now;
+                    state.IsFirstCall = false;
+                    state.SuppressedCount = 0;
+                }
+                else
+                {
+                    // Within window — suppress
+                    state.SuppressedCount++;
+                }
             }
-            else
-            {
-                // Within window — suppress
-                state.SuppressedCount++;
-            }
+            break;
         }
 
         if (_states.Count > _maxEntries)

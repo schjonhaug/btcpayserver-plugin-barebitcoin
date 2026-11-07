@@ -14,7 +14,7 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
+public partial class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
 {
     private readonly string _tempDir;
 
@@ -31,7 +31,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
     }
 
     private const string BaseConnectionString =
-        "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123;store-binding=signed-store-123";
+        "type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id=account-123;store-id=store-123;store-binding=signed-store-123";
 
     private BareBitcoinLightningConnectionStringHandler CreateHandler(string? authenticatedStoreId = null)
     {
@@ -147,7 +147,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         var handler = CreateHandler();
 
         var client = handler.Create(
-            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id={accountId}",
+            $"type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id={accountId}",
             Network.Main,
             out var error);
 
@@ -161,7 +161,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         var handler = CreateHandler();
 
         var client = handler.Create(
-            "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123",
+            "type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id=account-123",
             Network.Main,
             out var error);
 
@@ -179,7 +179,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         var handler = CreateHandler();
 
         var client = handler.Create(
-            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id={storeId}",
+            $"type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id=account-123;store-id={storeId}",
             Network.Main,
             out var error);
 
@@ -193,7 +193,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         var handler = CreateHandler();
 
         var client = handler.Create(
-            "type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123",
+            "type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id=account-123;store-id=store-123",
             Network.Main,
             out var error);
 
@@ -210,7 +210,7 @@ public class BareBitcoinLightningConnectionStringHandlerTests : IDisposable
         var handler = CreateHandler();
 
         var client = handler.Create(
-            $"type=barebitcoin;public-key=public-key;private-key=private-key;account-id=account-123;store-id=store-123;store-binding={storeBinding}",
+            $"type=barebitcoin;public-key=public-key;private-key=c2VjcmV0;account-id=account-123;store-id=store-123;store-binding={storeBinding}",
             Network.Main,
             out var error);
 

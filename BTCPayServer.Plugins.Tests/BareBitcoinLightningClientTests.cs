@@ -17,7 +17,7 @@ using Xunit;
 
 namespace BTCPayServer.Plugins.Tests;
 
-public class BareBitcoinLightningClientTests
+public partial class BareBitcoinLightningClientTests
 {
     // Mainnet BOLT11 test vector from BOLT #11 spec:
     // "Please make a donation of any amount using payment_hash 0001..."
@@ -465,6 +465,9 @@ public class BareBitcoinLightningClientTests
         Exception? untrackException = null,
         IReadOnlyCollection<string>? trackedInvoices = null) : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(true);
+
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
             => trackException is not null
                 ? Task.FromException(trackException)
@@ -517,7 +520,7 @@ public class BareBitcoinLightningClientTests
     }
 
     [Fact]
-    public async Task GetInvoice_ReturnsNull_WhenInvoiceFieldIsMissing()
+    public async Task GetInvoice_RejectsMissingInvoiceFieldWithoutUntracking()
     {
         var json = """
             {
@@ -528,8 +531,7 @@ public class BareBitcoinLightningClientTests
         var handler = new FakeMessageHandler(json);
         var client = CreateClient(handler, invoiceService);
 
-        var result = await client.GetInvoice("inv-missing");
-        Assert.Null(result);
+        await Assert.ThrowsAsync<InvalidOperationException>(() => client.GetInvoice("inv-missing"));
     }
 
     [Fact]
@@ -1331,6 +1333,9 @@ public class BareBitcoinLightningClientTests
 
     private sealed class MutableInvoiceService(HashSet<string> tracked) : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(true);
+
         public Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
         {
             tracked.Add(invoiceId);
@@ -1352,6 +1357,9 @@ public class BareBitcoinLightningClientTests
 
     private sealed class ScopedInMemoryInvoiceService : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default)
+            => Task.FromResult(true);
+
         private readonly Dictionary<BareBitcoinInvoiceScope, HashSet<string>> _tracked = new();
         private readonly object _lock = new();
 

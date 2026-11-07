@@ -7,6 +7,7 @@ namespace BTCPayServer.Plugins.BareBitcoin.Services;
 
 public interface IBareBitcoinInvoiceService
 {
+    Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default);
     Task TrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default);
     Task UntrackInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default);
     Task<bool> TryClaimLegacyInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default);

@@ -399,9 +399,6 @@ public class BareBitcoinInvoiceLifecycleTests
     [Theory]
     [InlineData("INVOICE_STATUS_CANCELED", LightningInvoiceStatus.Expired, false, true)]
     [InlineData("INVOICE_STATUS_PENDING", LightningInvoiceStatus.Unpaid, true, false)]
-    [InlineData("INVOICE_STATUS_UNSPECIFIED", LightningInvoiceStatus.Unpaid, true, false)]
-    [InlineData(null, LightningInvoiceStatus.Unpaid, true, false)]
-    [InlineData("INVOICE_STATUS_FUTURE", LightningInvoiceStatus.Unpaid, true, false)]
     public async Task GetInvoice_MapsStatusAndAppliesScopedTrackingSideEffects(
         string? providerStatus,
         LightningInvoiceStatus expectedStatus,
@@ -1050,6 +1047,8 @@ public class BareBitcoinInvoiceLifecycleTests
 
     private sealed class RecordingInvoiceService : IBareBitcoinInvoiceService
     {
+        public Task<bool> CanAccessInvoice(BareBitcoinInvoiceScope scope, string invoiceId, CancellationToken cancellation = default) => Task.FromResult(true);
+
         private readonly ConcurrentDictionary<BareBitcoinInvoiceScope, ConcurrentDictionary<string, byte>> _tracked = new();
         private readonly ConcurrentQueue<ScopedInvoiceCall> _trackCalls = new();
         private readonly ConcurrentQueue<ScopedInvoiceCall> _untrackCalls = new();

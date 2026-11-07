@@ -1,6 +1,7 @@
 #nullable enable
 using System;
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -55,7 +56,8 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private static readonly TimeSpan DefaultPeerDeliveryTimeout = TimeSpan.FromSeconds(5);
     private readonly TimeSpan _peerDeliveryTimeout;
 
-    private volatile bool _isDisposed;
+    private int _isDisposed;
+    private int _reading;
 
     // Limits the number of concurrent GetInvoice API calls to avoid rate limiting
     private readonly int _maxPollConcurrency;
@@ -69,7 +71,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     internal TimeSpan CurrentPollDelay { get; private set; } = TimeSpan.FromSeconds(2);
     internal Task PollingTask => _pollingTask;
 
-    public bool IsDisposed => _isDisposed;
+    public bool IsDisposed => Volatile.Read(ref _isDisposed) != 0;
 
     internal Action<LightningInvoice>? OnBeforeWrite { get; }
     internal Action<LightningInvoice>? OnAfterWrite { get; }
@@ -115,7 +117,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
         var recentlyPaid = _listenerHub.Subscribe(_invoiceScope, this);
 
         // Start the polling task immediately
-        _pollingTask = StartPolling(recentlyPaid);
+        _pollingTask = Task.Run(() => StartPolling(recentlyPaid));
     }
 
     /// <summary>
@@ -126,6 +128,14 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// 3. Notifies of any detected payments via the channel
     /// </summary>
     private async Task StartPolling(IReadOnlyList<BareBitcoinListenerHub.RecentlyPaid> recentlyPaid)
+    {
+        Exception? failure = null;
+        try { await PollLoop(recentlyPaid); }
+        catch (Exception ex) { failure = ex; throw; }
+        finally { _invoices.Writer.TryComplete(failure); }
+    }
+
+    private async Task PollLoop(IReadOnlyList<BareBitcoinListenerHub.RecentlyPaid> recentlyPaid)
     {
         _logger.LogDebug("Starting invoice polling task");
 
@@ -156,42 +166,15 @@ public class BareBitcoinListener : ILightningInvoiceListener
                 // Get the current list of invoices to track
                 var trackedInvoices = await _invoiceService.GetTrackedInvoices(_invoiceScope, _cts.Token);
                 _logger.LogDebug("Polling {Count} tracked invoices for updates", trackedInvoices.Count);
-                var results = new ConcurrentBag<(string invoiceId, LightningInvoice? invoice)>();
                 var failureCount = 0;
-
-                await Parallel.ForEachAsync(trackedInvoices, new ParallelOptions
-                {
-                    MaxDegreeOfParallelism = _maxPollConcurrency,
-                    CancellationToken = _cts.Token
-                }, async (invoiceId, token) =>
-                {
-                    try
-                    {
-                        _logger.LogDebug("Polling invoice {InvoiceId}", invoiceId);
-                        var invoice = await _lightningClient.GetInvoice(invoiceId, token);
-                        results.Add((invoiceId, invoice));
-                    }
-                    catch (OperationCanceledException) when (_cts.Token.IsCancellationRequested)
-                    {
-                        throw; // Shutdown requested, propagate to stop the loop
-                    }
-                    catch (HttpRequestException ex) when (ex.StatusCode == System.Net.HttpStatusCode.TooManyRequests)
-                    {
-                        _logger.LogDebug("Invoice {InvoiceId} is rate-limited, skipping until next cycle", invoiceId);
-                    }
-                    catch (Exception ex)
-                    {
-                        Interlocked.Increment(ref failureCount);
-                        _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}, will retry next cycle", invoiceId);
-                    }
-                });
 
                 // Listeners that did not take a notification in time are skipped for the rest of the
                 // cycle, so one stalled listener costs a cycle at most one timeout, not one per invoice.
                 var stalledPeers = new HashSet<BareBitcoinListener>();
 
                 // Process results sequentially
-                foreach (var (invoiceId, invoice) in results)
+                await foreach (var (invoiceId, invoice) in PollInvoices(trackedInvoices,
+                    () => Interlocked.Increment(ref failureCount), _cts.Token))
                 {
                     if (invoice == null)
                     {
@@ -288,6 +271,52 @@ public class BareBitcoinListener : ILightningInvoiceListener
                     break;
                 }
             }
+        }
+    }
+
+    private async IAsyncEnumerable<(string id, LightningInvoice? invoice)> PollInvoices(
+        IReadOnlyCollection<string> ids, Action onFailure,
+        [EnumeratorCancellation] CancellationToken cancellation)
+    {
+        using var cycle = CancellationTokenSource.CreateLinkedTokenSource(cancellation);
+        var results = Channel.CreateBounded<(string, LightningInvoice?)>(_maxPollConcurrency);
+        async Task Produce()
+        {
+            Exception? failure = null;
+            try
+            {
+                await Parallel.ForEachAsync(ids, new ParallelOptions
+                {
+                    MaxDegreeOfParallelism = _maxPollConcurrency,
+                    CancellationToken = cycle.Token
+                }, async (id, token) =>
+                {
+                    try
+                    {
+                        var invoice = await _lightningClient.GetInvoice(id, token);
+                        await results.Writer.WriteAsync((id, invoice), token);
+                    }
+                    catch (OperationCanceledException) when (cycle.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        onFailure();
+                        _logger.LogWarning(ex, "Failed to poll invoice {InvoiceId}; tracking is retained", id);
+                    }
+                });
+            }
+            catch (Exception ex) { failure = ex; }
+            finally { results.Writer.TryComplete(failure); }
+        }
+        var producer = Produce();
+        try
+        {
+            await foreach (var result in results.Reader.ReadAllAsync(cancellation))
+                yield return result;
+        }
+        finally
+        {
+            cycle.Cancel();
+            await producer;
         }
     }
 
@@ -409,7 +438,7 @@ public class BareBitcoinListener : ILightningInvoiceListener
     private async Task<bool> DeliverFromPeer(string invoiceId, LightningInvoice invoice, CancellationToken peerCancellation)
     {
         // A disposed listener has no consumer left, so there is nothing to deliver to.
-        if (_isDisposed || _lifetime.IsCancellationRequested)
+        if (IsDisposed || _lifetime.IsCancellationRequested)
             return true;
 
         CancellationTokenSource linked;
@@ -472,24 +501,19 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// </summary>
     public void Dispose()
     {
-        if (_isDisposed)
-            return;
-
-        _logger.LogDebug("Disposing listener");
+        if (Interlocked.Exchange(ref _isDisposed, 1) != 0) return;
         _listenerHub.Unsubscribe(_invoiceScope, this);
         _cts.Cancel();
-        try
+        _invoices.Writer.TryComplete();
+        // A non-cooperative client may outlive the synchronous host disposal budget.
+        // Its token source remains owned by the worker until it has actually exited.
+        _ = _pollingTask.ContinueWith(task =>
         {
-            _pollingTask.Wait(TimeSpan.FromSeconds(5));
-            _invoices.Writer.Complete();
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Error while waiting for polling task to complete during disposal");
-        }
-        _cts.Dispose();
-        _isDisposed = true;
-        _logger.LogDebug("Listener disposed");
+            if (task.Exception is { } error) _logger.LogError(error, "Invoice polling stopped with an error");
+            _cts.Dispose();
+        }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        try { _pollingTask.Wait(TimeSpan.FromSeconds(5)); }
+        catch (Exception ex) { _logger.LogDebug(ex, "Polling stopped during disposal"); }
     }
 
     /// <summary>
@@ -500,9 +524,11 @@ public class BareBitcoinListener : ILightningInvoiceListener
     /// <returns>The next paid invoice</returns>
     public async Task<LightningInvoice> WaitInvoice(CancellationToken cancellation)
     {
-        if (_isDisposed)
+        if (IsDisposed)
             throw new ObjectDisposedException(nameof(BareBitcoinListener));
 
+        if (Interlocked.CompareExchange(ref _reading, 1, 0) != 0)
+            throw new InvalidOperationException("Only one invoice consumer may wait on a listener at a time");
         _logger.LogDebug("WaitInvoice called, waiting for payment notification");
         try 
         {
@@ -522,5 +548,6 @@ public class BareBitcoinListener : ILightningInvoiceListener
             _logger.LogError(ex, "Error in WaitInvoice: {Message}", ex.Message);
             throw;
         }
+        finally { Volatile.Write(ref _reading, 0); }
     }
 }
